@@ -1,48 +1,97 @@
 import { View, Text, TextInput, TextInputProps, ViewStyle } from 'react-native';
+import { ReactNode, useState } from 'react';
+import { colors } from '@/lib/theme';
 
 interface InputProps extends TextInputProps {
   label?: string;
   error?: string;
   hint?: string;
+  iconLeft?: ReactNode;
+  iconRight?: ReactNode;
   containerStyle?: ViewStyle;
+  accentColor?: string;
 }
 
-export function Input({ label, error, hint, containerStyle, style, ...props }: InputProps) {
+export function Input({
+  label,
+  error,
+  hint,
+  iconLeft,
+  iconRight,
+  containerStyle,
+  style,
+  accentColor = colors.black,
+  ...props
+}: InputProps) {
+  const [focused, setFocused] = useState(false);
+
+  const borderColor = error ? colors.error : focused ? accentColor : colors.borderStrong;
+  const borderWidth = focused || error ? 2 : 1;
+
   return (
     <View style={containerStyle}>
       {label && (
         <Text
           style={{
-            color: '#9CA3AF',
-            fontSize: 13,
-            fontWeight: '600',
+            fontSize: 11,
+            fontWeight: '800',
+            color: colors.textPrimary,
             marginBottom: 8,
+            letterSpacing: 1.5,
           }}
         >
           {label}
         </Text>
       )}
-      <TextInput
-        placeholderTextColor="#4A5568"
-        style={[
-          {
-            backgroundColor: '#1A2634',
-            borderWidth: 1,
-            borderColor: error ? '#EF4444' : '#2D3748',
-            borderRadius: 12,
-            paddingHorizontal: 16,
-            paddingVertical: 14,
-            color: '#FFFFFF',
-            fontSize: 16,
-          },
-          style,
-        ]}
-        {...props}
-      />
+
+      <View
+        style={{
+          flexDirection: 'row',
+          alignItems: 'center',
+          backgroundColor: colors.surface,
+          borderWidth,
+          borderColor,
+          minHeight: 56,
+          paddingHorizontal: 16,
+        }}
+      >
+        {iconLeft && <View style={{ marginRight: 10 }}>{iconLeft}</View>}
+        <TextInput
+          placeholderTextColor={colors.textDisabled}
+          onFocus={() => setFocused(true)}
+          onBlur={() => setFocused(false)}
+          style={[
+            {
+              flex: 1,
+              color: colors.textPrimary,
+              fontSize: 16,
+              fontWeight: '500',
+              paddingVertical: 14,
+            },
+            style,
+          ]}
+          {...props}
+        />
+        {iconRight && <View style={{ marginLeft: 10 }}>{iconRight}</View>}
+      </View>
+
       {error ? (
-        <Text style={{ color: '#EF4444', fontSize: 12, marginTop: 5 }}>{error}</Text>
+        <Text
+          style={{
+            color: colors.error,
+            fontSize: 11,
+            marginTop: 6,
+            fontWeight: '700',
+            letterSpacing: 0.5,
+            textTransform: 'uppercase',
+          }}
+        >
+          {error}
+        </Text>
       ) : hint ? (
-        <Text style={{ color: '#6B7280', fontSize: 12, marginTop: 5 }}>{hint}</Text>
+        <Text style={{ color: colors.textMuted, fontSize: 12, marginTop: 6 }}>
+          {hint}
+        </Text>
       ) : null}
     </View>
   );

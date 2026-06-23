@@ -1,27 +1,29 @@
 import { TouchableOpacity, Text, ActivityIndicator, ViewStyle } from 'react-native';
+import { ReactNode } from 'react';
+import { colors } from '@/lib/theme';
+
+type Variant = 'primary' | 'secondary' | 'ghost' | 'danger';
+type Size    = 'sm' | 'md' | 'lg';
 
 interface ButtonProps {
   onPress?: () => void;
   label: string;
-  variant?: 'primary' | 'secondary' | 'outline' | 'danger';
-  size?: 'sm' | 'md' | 'lg';
+  variant?: Variant;
+  size?: Size;
   loading?: boolean;
   disabled?: boolean;
   color?: string;
+  textColor?: string;
+  fullWidth?: boolean;
+  iconLeft?: ReactNode;
+  iconRight?: ReactNode;
   style?: ViewStyle;
 }
 
-const VARIANTS = {
-  primary: { bg: '#2D9148', text: '#FFFFFF', border: 'transparent' },
-  secondary: { bg: '#1A2634', text: '#FFFFFF', border: '#2D3748' },
-  outline: { bg: 'transparent', text: '#2D9148', border: '#2D9148' },
-  danger: { bg: 'transparent', text: '#EF4444', border: '#EF444433' },
-};
-
 const SIZES = {
-  sm: { ph: 12, pv: 8, fs: 13, radius: 8 },
-  md: { ph: 20, pv: 14, fs: 15, radius: 12 },
-  lg: { ph: 24, pv: 16, fs: 17, radius: 14 },
+  sm: { height: 40, fontSize: 12, px: 16 },
+  md: { height: 52, fontSize: 14, px: 20 },
+  lg: { height: 64, fontSize: 15, px: 24 },
 };
 
 export function Button({
@@ -32,38 +34,65 @@ export function Button({
   loading = false,
   disabled = false,
   color,
+  textColor,
+  fullWidth = false,
+  iconLeft,
+  iconRight,
   style,
 }: ButtonProps) {
-  const v = VARIANTS[variant];
   const s = SIZES[size];
+
+  const bgColor =
+    color ??
+    (variant === 'primary'   ? colors.black
+   : variant === 'secondary' ? colors.surfaceAlt
+   : variant === 'danger'    ? colors.error
+   : 'transparent');
+
+  const labelColor =
+    textColor ??
+    (variant === 'secondary' ? colors.textPrimary
+   : variant === 'ghost'     ? colors.textSecondary
+   : '#FFFFFF');
 
   return (
     <TouchableOpacity
       onPress={onPress}
       disabled={disabled || loading}
-      activeOpacity={0.8}
+      activeOpacity={0.85}
       style={[
         {
-          backgroundColor: color ?? v.bg,
-          paddingHorizontal: s.ph,
-          paddingVertical: s.pv,
-          borderRadius: s.radius,
-          borderWidth: v.border !== 'transparent' ? 1 : 0,
-          borderColor: v.border,
+          backgroundColor: bgColor,
+          height: s.height,
+          paddingHorizontal: s.px,
+          flexDirection: 'row',
           alignItems: 'center',
           justifyContent: 'center',
-          flexDirection: 'row',
-          opacity: disabled ? 0.5 : 1,
+          gap: 8,
+          opacity: disabled ? 0.4 : 1,
+          alignSelf: fullWidth ? 'stretch' : 'flex-start',
         },
         style,
       ]}
     >
       {loading ? (
-        <ActivityIndicator size="small" color={v.text} />
+        <ActivityIndicator size="small" color={labelColor} />
       ) : (
-        <Text style={{ color: v.text, fontSize: s.fs, fontWeight: '700' }}>
-          {label}
-        </Text>
+        <>
+          {iconLeft}
+          <Text
+            style={{
+              color: labelColor,
+              fontSize: s.fontSize,
+              fontWeight: '900',
+              letterSpacing: 1.5,
+              textTransform: 'uppercase',
+            }}
+          >
+            {label}
+          </Text>
+          {iconRight}
+        </>
       )}
     </TouchableOpacity>
   );
