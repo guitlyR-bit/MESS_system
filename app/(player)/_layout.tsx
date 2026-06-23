@@ -30,7 +30,7 @@ export default function PlayerLayout() {
         }}
       >
         <Tabs.Screen name="home"    options={{ tabBarLabel: 'DOMŮ'   }} />
-        <Tabs.Screen name="courts"  options={{ tabBarLabel: 'KURTY'  }} />
+        <Tabs.Screen name="courts"  options={{ tabBarLabel: 'REZERVOVAT' }} />
         <Tabs.Screen name="matches" options={{ tabBarLabel: 'ZÁPASY' }} />
         <Tabs.Screen name="profile" options={{ tabBarLabel: 'PROFIL' }} />
       </Tabs>

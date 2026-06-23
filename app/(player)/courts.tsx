@@ -141,21 +141,29 @@ function ListView({ search, onSearchChange, sportFilter, onSportFilter, onSelect
         />
       </View>
 
-      {/* Sport filtry */}
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.filters}
-        contentContainerStyle={s.filtersContent}>
-        {sports.map(sp => (
-          <TouchableOpacity
-            key={sp}
-            onPress={() => onSportFilter(sp)}
-            style={[s.filterChip, sportFilter === sp && s.filterChipActive]}
-          >
-            <Text style={[s.filterChipText, sportFilter === sp && s.filterChipTextActive]}>
-              {sp === 'all' ? 'Vše' : SPORT_LABELS[sp] ?? sp}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </ScrollView>
+      {/* Sport filtry — pevná výška, žádné přeskakování */}
+      <View style={s.filtersWrap}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={s.filtersContent}
+        >
+          {sports.map(sp => (
+            <TouchableOpacity
+              key={sp}
+              onPress={() => onSportFilter(sp)}
+              style={[s.filterChip, sportFilter === sp && s.filterChipActive]}
+            >
+              <Text
+                style={[s.filterChipText, sportFilter === sp && s.filterChipTextActive]}
+                numberOfLines={1}
+              >
+                {sp === 'all' ? 'Vše' : SPORT_LABELS[sp] ?? sp}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+      </View>
 
       {/* Počet výsledků */}
       <View style={s.resultCount}>
@@ -482,11 +490,33 @@ const s = StyleSheet.create({
   searchBar: { backgroundColor: colors.surface, paddingHorizontal: 14, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: colors.border },
   searchInput: { height: 44, backgroundColor: colors.bgAlt, paddingHorizontal: 14, fontSize: 15, color: colors.textPrimary, borderWidth: 1, borderColor: colors.border },
 
-  // Filtry
-  filters: { backgroundColor: colors.surface, borderBottomWidth: 1, borderBottomColor: colors.border },
-  filtersContent: { paddingHorizontal: 14, paddingVertical: 10, gap: 8, flexDirection: 'row' },
-  filterChip: { paddingHorizontal: 14, paddingVertical: 7, backgroundColor: colors.bgAlt, borderWidth: 1, borderColor: colors.border },
-  filterChipActive: { backgroundColor: colors.textPrimary, borderColor: colors.textPrimary },
+  // Filtry — pevná výška, chipy nemění layout
+  filtersWrap: {
+    height: 52,
+    backgroundColor: colors.surface,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+    justifyContent: 'center',
+  },
+  filtersContent: {
+    paddingHorizontal: 14,
+    gap: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  filterChip: {
+    height: 32,
+    paddingHorizontal: 14,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: colors.bgAlt,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  filterChipActive: {
+    backgroundColor: colors.textPrimary,
+    borderColor: colors.textPrimary,
+  },
   filterChipText: { fontSize: 12, fontWeight: '700', color: colors.textSecondary },
   filterChipTextActive: { color: '#fff' },
 
