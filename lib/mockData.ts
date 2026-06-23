@@ -3,7 +3,68 @@
  * Nahrazuje volání Supabase — bude vyměněno za reálné API
  */
 
-import type { CourtWithClub, BookingWithCourt } from '@/types/database';
+import type { CourtWithClub, BookingWithCourt, SportType, ClubBooking, ClubSettings, PaymentStatus } from '@/types/database';
+
+// ─── Sportoviště (venues / kluby) ─────────────────────────────────────────────
+
+export interface Venue {
+  id: string;
+  name: string;
+  city: string;
+  address: string;
+  sports: SportType[];
+  courtCount: number;
+  priceFrom: number;
+  priceTo: number;
+  availableToday: number;
+}
+
+export const MOCK_VENUES: Venue[] = [
+  {
+    id: 'club1',
+    name: 'TK Sparta Praha',
+    city: 'Praha 7',
+    address: 'Milady Horákové 98',
+    sports: ['tennis'],
+    courtCount: 2,
+    priceFrom: 250,
+    priceTo: 250,
+    availableToday: 8,
+  },
+  {
+    id: 'club2',
+    name: 'Badminton Centrum Praha',
+    city: 'Praha 4',
+    address: 'Pankrácké náměstí 3',
+    sports: ['badminton'],
+    courtCount: 2,
+    priceFrom: 180,
+    priceTo: 180,
+    availableToday: 9,
+  },
+  {
+    id: 'club3',
+    name: 'Squash Aréna Vinohrady',
+    city: 'Praha 2',
+    address: 'Mánesova 8',
+    sports: ['squash'],
+    courtCount: 1,
+    priceFrom: 200,
+    priceTo: 200,
+    availableToday: 4,
+  },
+  {
+    id: 'club4',
+    name: 'Padel Club Brno',
+    city: 'Brno',
+    address: 'Veveří 45',
+    sports: ['padel'],
+    courtCount: 1,
+    priceFrom: 300,
+    priceTo: 300,
+    availableToday: 6,
+  },
+];
 
 // ─── Sportoviště ──────────────────────────────────────────────────────────────
 
@@ -174,6 +235,7 @@ export const MOCK_MY_BOOKINGS: BookingWithCourt[] = [
     ends_at:   todayISO(1, 11),
     status: 'confirmed',
     price: 250,
+    slots: [6, 7],   // 10:00–11:00
     created_at: new Date().toISOString(),
   },
   {
@@ -188,6 +250,7 @@ export const MOCK_MY_BOOKINGS: BookingWithCourt[] = [
     ends_at:   todayISO(3, 18),
     status: 'confirmed',
     price: 180,
+    slots: [20, 21],  // 17:00–18:00
     created_at: new Date().toISOString(),
   },
 ];
@@ -251,4 +314,58 @@ export const SURFACE_LABELS: Record<string, string> = {
   grass:   'Tráva',
   carpet:  'Koberec',
   indoor:  'Hala',
+};
+
+// ─── Club admin mock data ─────────────────────────────────────────────────────
+
+function mkCB(
+  id: string, courtId: string, playerName: string,
+  dayOffset: number, slots: number[],
+  pricePerHour: number, paymentStatus: PaymentStatus
+): ClubBooking {
+  const date    = todayStr(dayOffset);
+  const slotMin = Math.min(...slots);
+  const slotMax = Math.max(...slots);
+  return {
+    id, court_id: courtId, player_name: playerName, date,
+    starts_at: `${date}T${slotToTime(slotMin)}:00.000Z`,
+    ends_at:   `${date}T${slotEndTime(slotMax)}:00.000Z`,
+    slots, price: slotPrice(slots.length, pricePerHour),
+    payment_status: paymentStatus, status: 'confirmed',
+  };
+}
+
+export const MOCK_CLUB_BOOKINGS: ClubBooking[] = [
+  // Dnes — Dvorec 1 (c1)
+  mkCB('cb1',  'c1', 'Jan Novák',           0, [4,5,6],          250, 'paid'),
+  mkCB('cb2',  'c1', 'Petra Marková',        0, [14,15,16,17],    250, 'pay_on_site'),
+  // Dnes — Dvorec 2 (c2)
+  mkCB('cb3',  'c2', 'Pavel Horák',          0, [2,3],            250, 'paid'),
+  mkCB('cb4',  'c2', 'Jana Svobodová',       0, [12,13],          250, 'pending'),
+  mkCB('cb5',  'c2', 'Martin Kolář',         0, [24,25],          250, 'pay_on_site'),
+  // Dnes — Hala A – kurt 1 (c3)
+  mkCB('cb6',  'c3', 'Kateřina Nová',        0, [6,7,8,9],        180, 'paid'),
+  mkCB('cb7',  'c3', 'Tomáš Veselý',         0, [22,23,24,25,26], 180, 'pay_on_site'),
+  // Dnes — Hala A – kurt 2 (c4)
+  mkCB('cb8',  'c4', 'Eva Procházková',      0, [4,5,6],          180, 'pending'),
+  mkCB('cb9',  'c4', 'Radek Blažek',         0, [16,17,18,19],    180, 'paid'),
+  // Dnes — Squash Kurt 1 (c5)
+  mkCB('cb10', 'c5', 'Lukáš Beneš',          0, [2,3,10,11],      200, 'paid'),
+  // Dnes — Padel kurt 1 (c6)
+  mkCB('cb11', 'c6', 'Alžběta Dvořáčková',  0, [4,5,6,7,8,9],    300, 'paid'),
+  mkCB('cb12', 'c6', 'Roman Vítek',          0, [20,21,22,23],    300, 'pay_on_site'),
+  // Zítra — Dvorec 1
+  mkCB('cb13', 'c1', 'Jan Novák',            1, [2,3],            250, 'pending'),
+  mkCB('cb14', 'c1', 'Ondřej Vítek',         1, [10,11,12,13],    250, 'pay_on_site'),
+  // Zítra — Dvorec 2
+  mkCB('cb15', 'c2', 'Marie Horáčková',      1, [6,7,8,9,10,11],  250, 'paid'),
+  // Zítra — Hala c3
+  mkCB('cb16', 'c3', 'Roman Blažek',         1, [4,5,6],          180, 'pending'),
+  mkCB('cb17', 'c3', 'Tereza Nováková',      1, [14,15,16,17,18,19], 180, 'pay_on_site'),
+];
+
+export const MOCK_CLUB_SETTINGS: ClubSettings = {
+  editLockHours: 24,   // hráč nemůže editovat méně než 24h před rezervací
+  openingSlot:   0,    // 7:00
+  closingSlot:   29,   // 21:30
 };

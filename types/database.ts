@@ -74,6 +74,32 @@ export interface BookingWithCourt extends Booking {
   court_sport: SportType;
   club_name: string;
   club_city: string;
+  slots?: number[];   // 30min slot indexy (0–29); umožňuje přesnou editaci
+}
+
+// ─── Club admin types ─────────────────────────────────────────────────────────
+
+export type PaymentStatus = 'paid' | 'pay_on_site' | 'pending';
+
+/** Rezervace viditelná správcem klubu — obsahuje jméno hráče a platební stav */
+export interface ClubBooking {
+  id: string;
+  court_id: string;
+  player_name: string;
+  date: string;           // 'YYYY-MM-DD'
+  starts_at: string;
+  ends_at: string;
+  slots: number[];        // seřazené slot indexy (0–29)
+  price: number;
+  payment_status: PaymentStatus;
+  status: 'confirmed' | 'cancelled';
+}
+
+/** Nastavení klubu — editační zámek, provozní doba */
+export interface ClubSettings {
+  editLockHours: number;  // počet hodin před začátkem, kdy hráč nesmí editovat
+  openingSlot: number;    // index prvního slotu dne (výchozí 0 = 7:00)
+  closingSlot: number;    // index posledního slotu dne (výchozí 29 = 21:30)
 }
 
 export type MatchStatus = 'scheduled' | 'in_progress' | 'completed' | 'cancelled';
