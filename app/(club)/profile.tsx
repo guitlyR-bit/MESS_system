@@ -11,16 +11,6 @@ export default function ClubProfileScreen() {
     <SafeAreaView style={s.safe} edges={['bottom']}>
       <ScrollView contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false}>
 
-        <View style={[s.banner, { backgroundColor: W.yellow }]}>
-          <View style={s.avatarBox}>
-            <Text style={s.avatarText}>K</Text>
-          </View>
-          <View style={s.bannerInfo}>
-            <Text style={[s.bannerName, { color: '#111' }]}>Klub</Text>
-            <Text style={[s.bannerEmail, { color: 'rgba(0,0,0,0.55)' }]}>klub@email.cz</Text>
-          </View>
-        </View>
-
         <View style={s.actions}>
           <ActionTile label="Informace o klubu"  description="Název, adresa, kontakt"      accent={W.yellow} />
           <ActionTile label="Logo a fotky"       description="Vizuální prezentace klubu"   accent={W.amber}  badge="BRZY" />
@@ -40,11 +30,7 @@ export default function ClubProfileScreen() {
 const s = StyleSheet.create({
   safe:       { flex: 1, backgroundColor: colors.bgAlt },
   scroll:     { flexGrow: 1 },
-  banner:     { flexDirection: 'row', alignItems: 'center', padding: 24, gap: 16 },
-  avatarBox:  { width: 64, height: 64, backgroundColor: 'rgba(0,0,0,0.12)', alignItems: 'center', justifyContent: 'center' },
-  avatarText: { fontSize: 28, fontWeight: '900', color: '#111' },
-  bannerInfo: { gap: 3 },
-  actions:    { marginTop: 16 },
+  actions:  { marginTop: 8 },
   logoutBtn:  { backgroundColor: '#111111', height: 56, justifyContent: 'center', alignItems: 'center', margin: 16 },
   logoutText: { color: '#fff', fontSize: 13, fontWeight: '900', letterSpacing: 2 },
 });

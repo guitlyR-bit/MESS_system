@@ -11,16 +11,6 @@ export default function PlayerProfileScreen() {
     <SafeAreaView style={s.safe} edges={['bottom']}>
       <ScrollView contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false}>
 
-        <View style={[s.banner, { backgroundColor: W.orange }]}>
-          <View style={s.avatarBox}>
-            <Text style={s.avatarText}>H</Text>
-          </View>
-          <View style={s.bannerInfo}>
-            <Text style={s.bannerName}>Hráč</Text>
-            <Text style={s.bannerEmail}>hrac@email.cz</Text>
-          </View>
-        </View>
-
         <View style={s.actions}>
           <ActionTile label="Osobní údaje"    description="Jméno, datum narození, kontakt" accent={W.orange} />
           <ActionTile label="Změnit heslo"    description="Zabezpečení účtu"               accent={W.amber}  />
@@ -40,13 +30,7 @@ export default function PlayerProfileScreen() {
 const s = StyleSheet.create({
   safe:       { flex: 1, backgroundColor: colors.bgAlt },
   scroll:     { flexGrow: 1 },
-  banner:     { flexDirection: 'row', alignItems: 'center', padding: 24, gap: 16 },
-  avatarBox:  { width: 64, height: 64, backgroundColor: 'rgba(0,0,0,0.18)', alignItems: 'center', justifyContent: 'center' },
-  avatarText: { fontSize: 28, fontWeight: '900', color: '#fff' },
-  bannerInfo: { gap: 3 },
-  bannerName: { fontSize: 20, fontWeight: '900', color: '#fff' },
-  bannerEmail:{ fontSize: 13, color: 'rgba(255,255,255,0.75)' },
-  actions:    { marginTop: 16 },
+  actions:  { marginTop: 8 },
   logoutBtn:  { backgroundColor: '#111111', height: 56, justifyContent: 'center', alignItems: 'center', margin: 16 },
   logoutText: { color: '#fff', fontSize: 13, fontWeight: '900', letterSpacing: 2 },
 });
