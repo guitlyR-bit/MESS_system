@@ -32,7 +32,7 @@ const ROLES = [
     label: 'KLUB',
     sub: 'Sportoviště · Rezervace · Členové',
     bg: colors.club.accent,
-    textColor: '#111111',
+    textColor: '#FFFFFF',
   },
 ] as const;
 

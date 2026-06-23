@@ -1,51 +1,64 @@
-import { View, Text, ScrollView } from 'react-native';
+import { View, Text, ScrollView, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Card } from '@/components/ui/Card';
+import { colors } from '@/lib/theme';
+import { StatTile } from '@/components/ui/StatTile';
+import { ActionTile } from '@/components/ui/ActionTile';
+
+const A = colors.player.accent;
+const AF = colors.player.accentFade;
 
 export default function PlayerHomeScreen() {
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: '#0F1923' }} edges={['bottom']}>
-      <ScrollView contentContainerStyle={{ padding: 20, gap: 16 }}>
-        {/* Greeting */}
-        <View style={{ marginBottom: 8 }}>
-          <Text style={{ color: '#6B7280', fontSize: 14 }}>Dobré ráno 👋</Text>
-          <Text style={{ color: '#FFFFFF', fontSize: 26, fontWeight: '700', marginTop: 4 }}>
-            Domů
-          </Text>
+    <SafeAreaView style={s.safe} edges={['bottom']}>
+      <ScrollView contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false}>
+
+        {/* Statistiky */}
+        <View style={s.row}>
+          <StatTile label="Rezervace" value="0" sub="tento týden" accent={A} accentFade={AF} />
+          <View style={s.divider} />
+          <StatTile label="Zápasy" value="0" sub="odehráno" accent={A} accentFade={AF} />
+        </View>
+        <View style={[s.row, s.rowBorderTop]}>
+          <StatTile label="Turnaje" value="0" sub="přihlášeno" accent={A} accentFade={AF} />
+          <View style={s.divider} />
+          <StatTile label="Ranking" value="—" sub="ELO body" accent={A} accentFade={AF} />
         </View>
 
-        {/* Quick stats */}
-        <View style={{ flexDirection: 'row', gap: 12 }}>
-          <Card style={{ flex: 1 }}>
-            <Text style={{ color: '#6B7280', fontSize: 12 }}>Rezervace</Text>
-            <Text style={{ color: '#2D9148', fontSize: 28, fontWeight: '800', marginTop: 4 }}>
-              0
-            </Text>
-            <Text style={{ color: '#4A5568', fontSize: 11, marginTop: 2 }}>tento týden</Text>
-          </Card>
-          <Card style={{ flex: 1 }}>
-            <Text style={{ color: '#6B7280', fontSize: 12 }}>Zápasy</Text>
-            <Text style={{ color: '#2D9148', fontSize: 28, fontWeight: '800', marginTop: 4 }}>
-              0
-            </Text>
-            <Text style={{ color: '#4A5568', fontSize: 11, marginTop: 2 }}>odehráno</Text>
-          </Card>
-        </View>
+        <View style={s.sectionGap} />
 
-        <Card>
-          <Text style={{ color: '#FFFFFF', fontSize: 16, fontWeight: '600', marginBottom: 8 }}>
-            Nadcházející rezervace
-          </Text>
-          <Text style={{ color: '#4A5568', fontSize: 14 }}>Žádné nadcházející rezervace</Text>
-        </Card>
+        {/* Akce */}
+        <ActionTile
+          label="Rezervovat kurt"
+          description="Dostupné termíny v okolí"
+          accent={A}
+          badge="NOVÁ"
+        />
+        <ActionTile
+          label="Moje rezervace"
+          description="Nadcházející i minulé"
+          accent={A}
+        />
+        <ActionTile
+          label="Výsledky zápasů"
+          description="Historie a skóre"
+          accent={A}
+        />
+        <ActionTile
+          label="Turnaje"
+          description="Přihlašování a výsledky"
+          accent={A}
+        />
 
-        <Card>
-          <Text style={{ color: '#FFFFFF', fontSize: 16, fontWeight: '600', marginBottom: 8 }}>
-            Poslední výsledky
-          </Text>
-          <Text style={{ color: '#4A5568', fontSize: 14 }}>Zatím žádné odehrané zápasy</Text>
-        </Card>
       </ScrollView>
     </SafeAreaView>
   );
 }
+
+const s = StyleSheet.create({
+  safe:       { flex: 1, backgroundColor: colors.bg },
+  scroll:     { flexGrow: 1 },
+  row:        { flexDirection: 'row' },
+  rowBorderTop: { borderTopWidth: 3, borderTopColor: '#111111' },
+  divider:    { width: 3, backgroundColor: '#111111' },
+  sectionGap: { height: 3, backgroundColor: '#111111' },
+});

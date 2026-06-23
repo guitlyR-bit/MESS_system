@@ -1,47 +1,45 @@
-import { View, Text, ScrollView } from 'react-native';
+import { View, ScrollView, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Card } from '@/components/ui/Card';
+import { colors } from '@/lib/theme';
+import { StatTile } from '@/components/ui/StatTile';
+import { ActionTile } from '@/components/ui/ActionTile';
+
+const A = colors.club.accent;
+const AF = colors.club.accentFade;
 
 export default function ClubHomeScreen() {
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: '#0F1923' }} edges={['bottom']}>
-      <ScrollView contentContainerStyle={{ padding: 20, gap: 16 }}>
-        <View style={{ marginBottom: 8 }}>
-          <Text style={{ color: '#6B7280', fontSize: 14 }}>Správa klubu 🏟️</Text>
-          <Text style={{ color: '#FFFFFF', fontSize: 26, fontWeight: '700', marginTop: 4 }}>
-            Přehled klubu
-          </Text>
+    <SafeAreaView style={s.safe} edges={['bottom']}>
+      <ScrollView contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false}>
+
+        <View style={s.row}>
+          <StatTile label="Sportoviště" value="0" sub="celkem" accent={A} accentFade={AF} />
+          <View style={s.divider} />
+          <StatTile label="Rezervace"   value="0" sub="dnes" accent={A} accentFade={AF} />
+        </View>
+        <View style={[s.row, s.rowBorderTop]}>
+          <StatTile label="Členové"  value="0" sub="aktivních" accent={A} accentFade={AF} />
+          <View style={s.divider} />
+          <StatTile label="Příjmy"   value="—" sub="tento měsíc" accent={A} accentFade={AF} />
         </View>
 
-        <View style={{ flexDirection: 'row', gap: 12 }}>
-          <Card style={{ flex: 1 }}>
-            <Text style={{ color: '#6B7280', fontSize: 12 }}>Kurty</Text>
-            <Text style={{ color: '#D4A017', fontSize: 28, fontWeight: '800', marginTop: 4 }}>
-              0
-            </Text>
-          </Card>
-          <Card style={{ flex: 1 }}>
-            <Text style={{ color: '#6B7280', fontSize: 12 }}>Členové</Text>
-            <Text style={{ color: '#D4A017', fontSize: 28, fontWeight: '800', marginTop: 4 }}>
-              0
-            </Text>
-          </Card>
-          <Card style={{ flex: 1 }}>
-            <Text style={{ color: '#6B7280', fontSize: 12 }}>Rezervace</Text>
-            <Text style={{ color: '#D4A017', fontSize: 28, fontWeight: '800', marginTop: 4 }}>
-              0
-            </Text>
-            <Text style={{ color: '#4A5568', fontSize: 11, marginTop: 2 }}>dnes</Text>
-          </Card>
-        </View>
+        <View style={s.sectionGap} />
 
-        <Card>
-          <Text style={{ color: '#FFFFFF', fontSize: 16, fontWeight: '600', marginBottom: 8 }}>
-            Dnešní rezervace
-          </Text>
-          <Text style={{ color: '#4A5568', fontSize: 14 }}>Žádné rezervace na dnes</Text>
-        </Card>
+        <ActionTile label="Správa rezervací"   description="Přehled a schvalování" accent={A} />
+        <ActionTile label="Sportoviště"        description="Kurty, hřiště, haly" accent={A} />
+        <ActionTile label="Členové klubu"      description="Registrace a správa" accent={A} />
+        <ActionTile label="Přehled příjmů"     description="Platby a faktury" accent={A} badge="BRZY" />
+
       </ScrollView>
     </SafeAreaView>
   );
 }
+
+const s = StyleSheet.create({
+  safe:         { flex: 1, backgroundColor: colors.bg },
+  scroll:       { flexGrow: 1 },
+  row:          { flexDirection: 'row' },
+  rowBorderTop: { borderTopWidth: 3, borderTopColor: '#111111' },
+  divider:      { width: 3, backgroundColor: '#111111' },
+  sectionGap:   { height: 3, backgroundColor: '#111111' },
+});

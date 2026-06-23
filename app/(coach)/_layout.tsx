@@ -1,58 +1,32 @@
 import { Tabs } from 'expo-router';
-import { Text } from 'react-native';
+import { colors } from '@/lib/theme';
 
-function Icon({ emoji, focused }: { emoji: string; focused: boolean }) {
-  return (
-    <Text style={{ fontSize: 20, opacity: focused ? 1 : 0.45 }}>{emoji}</Text>
-  );
-}
+const A = colors.coach.accent;
 
 export default function CoachLayout() {
   return (
     <Tabs
       screenOptions={{
         tabBarStyle: {
-          backgroundColor: '#0F1923',
-          borderTopColor: '#1A2634',
-          borderTopWidth: 1,
-          height: 62,
-          paddingBottom: 10,
+          backgroundColor: '#111111',
+          borderTopWidth: 0,
+          height: 64,
+          paddingBottom: 8,
+          paddingTop: 4,
         },
-        tabBarActiveTintColor: '#2980B9',
-        tabBarInactiveTintColor: '#4A5568',
-        headerStyle: { backgroundColor: '#0F1923' },
+        tabBarActiveTintColor: A,
+        tabBarInactiveTintColor: '#666666',
+        tabBarLabelStyle: { fontSize: 11, fontWeight: '800', letterSpacing: 0.5, textTransform: 'uppercase' },
+        headerStyle: { backgroundColor: A },
         headerTintColor: '#FFFFFF',
+        headerTitleStyle: { fontWeight: '900', fontSize: 16, letterSpacing: 0.5 },
         headerShadowVisible: false,
       }}
     >
-      <Tabs.Screen
-        name="home"
-        options={{
-          title: 'Domů',
-          tabBarIcon: ({ focused }) => <Icon emoji="🏠" focused={focused} />,
-        }}
-      />
-      <Tabs.Screen
-        name="schedule"
-        options={{
-          title: 'Rozvrh',
-          tabBarIcon: ({ focused }) => <Icon emoji="📅" focused={focused} />,
-        }}
-      />
-      <Tabs.Screen
-        name="players"
-        options={{
-          title: 'Hráči',
-          tabBarIcon: ({ focused }) => <Icon emoji="👥" focused={focused} />,
-        }}
-      />
-      <Tabs.Screen
-        name="profile"
-        options={{
-          title: 'Profil',
-          tabBarIcon: ({ focused }) => <Icon emoji="👤" focused={focused} />,
-        }}
-      />
+      <Tabs.Screen name="home"     options={{ title: 'Domů',      tabBarLabel: 'DOMŮ'      }} />
+      <Tabs.Screen name="schedule" options={{ title: 'Plán',      tabBarLabel: 'PLÁN'      }} />
+      <Tabs.Screen name="players"  options={{ title: 'Svěřenci',  tabBarLabel: 'SVĚŘENCI'  }} />
+      <Tabs.Screen name="profile"  options={{ title: 'Profil',    tabBarLabel: 'PROFIL'    }} />
     </Tabs>
   );
 }

@@ -1,41 +1,45 @@
-import { View, Text, ScrollView } from 'react-native';
+import { View, ScrollView, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Card } from '@/components/ui/Card';
+import { colors } from '@/lib/theme';
+import { StatTile } from '@/components/ui/StatTile';
+import { ActionTile } from '@/components/ui/ActionTile';
+
+const A = colors.coach.accent;
+const AF = colors.coach.accentFade;
 
 export default function CoachHomeScreen() {
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: '#0F1923' }} edges={['bottom']}>
-      <ScrollView contentContainerStyle={{ padding: 20, gap: 16 }}>
-        <View style={{ marginBottom: 8 }}>
-          <Text style={{ color: '#6B7280', fontSize: 14 }}>Vítejte zpět 📋</Text>
-          <Text style={{ color: '#FFFFFF', fontSize: 26, fontWeight: '700', marginTop: 4 }}>
-            Přehled trenéra
-          </Text>
+    <SafeAreaView style={s.safe} edges={['bottom']}>
+      <ScrollView contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false}>
+
+        <View style={s.row}>
+          <StatTile label="Svěřenci" value="0"  sub="aktivních" accent={A} accentFade={AF} />
+          <View style={s.divider} />
+          <StatTile label="Tréninky" value="0"  sub="tento týden" accent={A} accentFade={AF} />
+        </View>
+        <View style={[s.row, s.rowBorderTop]}>
+          <StatTile label="Hodiny" value="0"    sub="odpracováno" accent={A} accentFade={AF} />
+          <View style={s.divider} />
+          <StatTile label="Hodnocení" value="—" sub="průměr" accent={A} accentFade={AF} />
         </View>
 
-        <View style={{ flexDirection: 'row', gap: 12 }}>
-          <Card style={{ flex: 1 }}>
-            <Text style={{ color: '#6B7280', fontSize: 12 }}>Svěřenci</Text>
-            <Text style={{ color: '#2980B9', fontSize: 28, fontWeight: '800', marginTop: 4 }}>
-              0
-            </Text>
-          </Card>
-          <Card style={{ flex: 1 }}>
-            <Text style={{ color: '#6B7280', fontSize: 12 }}>Tréninky</Text>
-            <Text style={{ color: '#2980B9', fontSize: 28, fontWeight: '800', marginTop: 4 }}>
-              0
-            </Text>
-            <Text style={{ color: '#4A5568', fontSize: 11, marginTop: 2 }}>tento týden</Text>
-          </Card>
-        </View>
+        <View style={s.sectionGap} />
 
-        <Card>
-          <Text style={{ color: '#FFFFFF', fontSize: 16, fontWeight: '600', marginBottom: 8 }}>
-            Dnešní program
-          </Text>
-          <Text style={{ color: '#4A5568', fontSize: 14 }}>Žádné tréninky naplánované</Text>
-        </Card>
+        <ActionTile label="Naplánovat trénink"  description="Přidat tréninkovou jednotku" accent={A} badge="BRZY" />
+        <ActionTile label="Moji svěřenci"       description="Přehled a pokrok" accent={A} />
+        <ActionTile label="Tréninkový plán"     description="Týdenní a měsíční rozvrh" accent={A} />
+        <ActionTile label="Zprávy"              description="Komunikace se svěřenci" accent={A} badge="BRZY" />
+
       </ScrollView>
     </SafeAreaView>
   );
 }
+
+const s = StyleSheet.create({
+  safe:         { flex: 1, backgroundColor: colors.bg },
+  scroll:       { flexGrow: 1 },
+  row:          { flexDirection: 'row' },
+  rowBorderTop: { borderTopWidth: 3, borderTopColor: '#111111' },
+  divider:      { width: 3, backgroundColor: '#111111' },
+  sectionGap:   { height: 3, backgroundColor: '#111111' },
+});

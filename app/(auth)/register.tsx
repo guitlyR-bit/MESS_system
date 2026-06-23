@@ -16,7 +16,7 @@ import type { UserRole } from '../index';
 const ROLE_CONFIG = {
   player: { label: 'HRÁČ',   accent: colors.player.accent, textOnAccent: '#FFF' },
   coach:  { label: 'TRENÉR', accent: colors.coach.accent,  textOnAccent: '#FFF' },
-  club:   { label: 'KLUB',   accent: colors.club.accent,   textOnAccent: '#111' },
+  club:   { label: 'KLUB',   accent: colors.club.accent,   textOnAccent: '#FFF' },
 } as const;
 
 export default function RegisterScreen() {

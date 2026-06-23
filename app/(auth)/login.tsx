@@ -16,7 +16,7 @@ import type { UserRole } from '../index';
 const ROLE_CONFIG = {
   player: { label: 'HRÁČ',   accent: colors.player.accent, textOnAccent: '#FFF', homeRoute: '/(player)/home' },
   coach:  { label: 'TRENÉR', accent: colors.coach.accent,  textOnAccent: '#FFF', homeRoute: '/(coach)/home'  },
-  club:   { label: 'KLUB',   accent: colors.club.accent,   textOnAccent: '#111', homeRoute: '/(club)/home'   },
+  club:   { label: 'KLUB',   accent: colors.club.accent,   textOnAccent: '#FFF', homeRoute: '/(club)/home'   },
 } as const;
 
 export default function LoginScreen() {
