@@ -16,7 +16,7 @@ export default function ProfileScreen() {
         <Card className="mt-4">
           <Text className="mb-3 text-sm text-gray-600">Účet (placeholder)</Text>
           <Link href="/(auth)/login" asChild>
-            <Button title="Přihlásit se" variant="secondary" />
+            <Button label="Přihlásit se" variant="secondary" />
           </Link>
         </Card>
       </View>

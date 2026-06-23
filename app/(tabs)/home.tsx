@@ -16,10 +16,10 @@ export default function HomeScreen() {
         <Card className="mt-4">
           <Text className="mb-3 text-sm text-gray-600">Rychlé akce (placeholder)</Text>
           <Link href="/(auth)/login" asChild>
-            <Button title="Přihlásit se" className="mb-2" />
+            <Button label="Přihlásit se" />
           </Link>
           <Link href="/club" asChild>
-            <Button title="Správa klubu" variant="outline" />
+            <Button label="Správa klubu" variant="outline" />
           </Link>
         </Card>
       </View>
