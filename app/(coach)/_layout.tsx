@@ -8,7 +8,7 @@ const A = colors.coach.accent;
 export default function CoachLayout() {
   return (
     <View style={{ flex: 1, backgroundColor: colors.bgAlt }}>
-      <AppHeader roleLabel="Trenér" accent={A} userName="Marie Trenérová" />
+      <AppHeader roleLabel="Trenér" currentRole="coach" accent={A} userName="Marie Trenérová" />
       <Tabs
         screenOptions={{
           headerShown: false,

@@ -8,7 +8,7 @@ const A = colors.player.accent;
 export default function PlayerLayout() {
   return (
     <View style={{ flex: 1, backgroundColor: colors.bgAlt }}>
-      <AppHeader roleLabel="Hráč" accent={A} userName="Jan Novák" />
+      <AppHeader roleLabel="Hráč" currentRole="player" accent={A} userName="Jan Novák" />
       <Tabs
         screenOptions={{
           headerShown: false,

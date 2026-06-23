@@ -8,7 +8,7 @@ const A = colors.club.accent;
 export default function ClubLayout() {
   return (
     <View style={{ flex: 1, backgroundColor: colors.bgAlt }}>
-      <AppHeader roleLabel="Klub" accent={A} userName="TK Meteor Praha" />
+      <AppHeader roleLabel="Klub" currentRole="club" accent={A} userName="TK Meteor Praha" />
       <Tabs
         screenOptions={{
           headerShown: false,
