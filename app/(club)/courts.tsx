@@ -6,34 +6,37 @@
  * Tab NASTAVENÍ — editační zámek, provozní doba
  */
 
-import React, { useState, useRef, useCallback, useMemo } from 'react';
+import React, { useState, useRef, useCallback, useMemo, useEffect } from 'react';
 import {
-  View, Text, ScrollView, TouchableOpacity, StyleSheet,
-  PanResponder, Modal, TextInput, Switch, Animated,
+  View, Text, ScrollView, TouchableOpacity, TouchableWithoutFeedback,
+  StyleSheet, PanResponder, Modal, TextInput, Switch, Animated, Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '@/lib/theme';
 import { useClubBookings } from '@/hooks/useClubBookings';
 import {
-  ALL_SLOTS, slotToTime, slotEndTime, getNext14Days, fmtDay,
-  SPORT_LABELS, SURFACE_LABELS, SLOT_COUNT,
+  ALL_SLOTS, slotToTime, slotEndTime, slotPrice, fmtDay,
+  SPORT_LABELS, SURFACE_LABELS, SLOT_COUNT, SLOT_START_HOUR,
+  MOCK_REGISTERED_PLAYERS, registeredPlayerFullName, slotDuration,
 } from '@/lib/mockData';
-import type { ClubBooking, CourtWithClub, CourtSurface, SportType } from '@/types/database';
+import type { RegisteredPlayer } from '@/lib/mockData';
+import type { ClubBooking, CourtWithClub, CourtSurface, SportType, PaymentStatus } from '@/types/database';
 
 // ─── Konstanty časové osy ─────────────────────────────────────────────────────
 
-const SLOT_W   = 72;   // px / 30 min slot
-const ROW_H    = 72;   // px / řada kurtu
-const COL_W    = 92;   // px pro sloupec s názvem kurtu
-const HEADER_H = 38;   // px výška řádku s časem
+const SLOT_W      = 72;   // px / 30 min slot
+const ROW_H       = 72;   // px / řada kurtu
+const COL_W       = 92;   // px pro sloupec s názvem kurtu
+const HEADER_H    = 38;   // px výška řádku s časem
+const SCROLLBAR_H = 10;   // px rezervovaný prostor pod gridem pro horizontální scrollbar
 
 // ─── Barvy platebního stavu ───────────────────────────────────────────────────
 
 const PAYMENT_BG: Record<string, string> = {
   paid:        '#16A34A',
   pay_on_site: '#D97706',
-  pending:     '#94A3B8',
+  pending:     '#EF4444',
 };
 const PAYMENT_LABEL: Record<string, string> = {
   paid:        'Zaplaceno',
@@ -46,6 +49,50 @@ const SPORT_COLORS: Record<string, string> = {
   tennis: W.orange, badminton: W.rose, squash: W.red,
   padel: W.amber, volleyball: W.yellow,
 };
+
+// ─── Týdenní pomocné funkce ───────────────────────────────────────────────────
+
+/** Vrátí pondělí týdne, do kterého patří datum `date` */
+function getMonday(date: Date): Date {
+  const d = new Date(date);
+  d.setHours(0, 0, 0, 0);
+  const day = d.getDay(); // 0 = Ne, 1 = Po, …
+  d.setDate(d.getDate() - (day === 0 ? 6 : day - 1));
+  return d;
+}
+
+/** Vrátí 7 dní (Po–Ne) pro týden posunutý o `weekOffset` od aktuálního */
+function getWeekDays(weekOffset: number): Date[] {
+  const monday = getMonday(new Date());
+  monday.setDate(monday.getDate() + weekOffset * 7);
+  return Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(monday);
+    d.setDate(d.getDate() + i);
+    return d;
+  });
+}
+
+/** Formátuje datum jako „16. 6." */
+function fmtShortDate(d: Date): string {
+  return `${d.getDate()}. ${d.getMonth() + 1}.`;
+}
+
+// ─── Kalendářové konstanty a pomocníci ───────────────────────────────────────
+
+const MONTH_NAMES = [
+  'Leden', 'Únor', 'Březen', 'Duben', 'Květen', 'Červen',
+  'Červenec', 'Srpen', 'Září', 'Říjen', 'Listopad', 'Prosinec',
+];
+const DAY_ABBR = ['Po', 'Út', 'St', 'Čt', 'Pá', 'So', 'Ne'];
+
+/** Vrátí weekOffset vybraného dne relativně k aktuálnímu pondělí */
+function getWeekOffsetForDate(date: Date): number {
+  const todayMon = getMonday(new Date());
+  const dayMon   = getMonday(date);
+  const msA = Date.UTC(todayMon.getFullYear(), todayMon.getMonth(), todayMon.getDate());
+  const msB = Date.UTC(dayMon.getFullYear(),   dayMon.getMonth(),   dayMon.getDate());
+  return Math.round((msB - msA) / (7 * 24 * 60 * 60 * 1000));
+}
 
 // ─── Hlavní obrazovka ─────────────────────────────────────────────────────────
 
@@ -79,13 +126,59 @@ export default function ClubCourtsScreen() {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function TimelineTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
-  const { courts, getBookingsForDate, moveBooking, updateBooking, settings } = hook;
+  const { courts, getBookingsForDate, moveBooking, updateBooking, createBooking, settings } = hook;
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [selectedBooking, setSelectedBooking] = useState<ClubBooking | null>(null);
+  const [createDraft, setCreateDraft] = useState<{ courtId: string; slotIdx: number } | null>(null);
+  const [hoveredSlotKey, setHoveredSlotKey] = useState<string | null>(null);
+  const [weekOffset, setWeekOffset] = useState(0);
+  const [calendarVisible, setCalendarVisible] = useState(false);
+  const [noteTooltip, setNoteTooltip] = useState<string | null>(null);
 
-  const days      = getNext14Days();
-  const dateKey   = selectedDate.toISOString().slice(0, 10);
+  const todayKey = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const days     = useMemo(() => getWeekDays(weekOffset), [weekOffset]);
+  const dateKey  = selectedDate.toISOString().slice(0, 10);
+
+  const handlePrevWeek = useCallback(() => {
+    const newOffset = weekOffset - 1;
+    const newDays   = getWeekDays(newOffset);
+    const newKeys   = newDays.map(d => d.toISOString().slice(0, 10));
+    setWeekOffset(newOffset);
+    if (!newKeys.includes(dateKey)) setSelectedDate(newDays[6]);
+  }, [weekOffset, dateKey]);
+
+  const handleNextWeek = useCallback(() => {
+    const newOffset = weekOffset + 1;
+    const newDays   = getWeekDays(newOffset);
+    const newKeys   = newDays.map(d => d.toISOString().slice(0, 10));
+    setWeekOffset(newOffset);
+    if (!newKeys.includes(dateKey)) setSelectedDate(newDays[0]);
+  }, [weekOffset, dateKey]);
+
+  const handleSelectWeek = useCallback((offset: number) => {
+    const newDays = getWeekDays(offset);
+    const newKeys = newDays.map(d => d.toISOString().slice(0, 10));
+    setWeekOffset(offset);
+    if (!newKeys.includes(dateKey)) setSelectedDate(newDays[0]);
+  }, [dateKey]);
+
+  const handleGoToday = useCallback(() => {
+    setWeekOffset(0);
+    setSelectedDate(new Date());
+  }, []);
+
+  const isOnToday = weekOffset === 0 && dateKey === todayKey;
   const dayBooks  = getBookingsForDate(dateKey);
+
+  // Mapa obsazených slotů per kurt — pro vykreslení volných buněk
+  const occupiedByCourt = useMemo(() => {
+    const map: Record<string, Set<number>> = {};
+    courts.forEach(c => { map[c.id] = new Set(); });
+    dayBooks.forEach(b => {
+      b.slots.forEach(s => map[b.court_id]?.add(s));
+    });
+    return map;
+  }, [dayBooks, courts]);
 
   // Sloty viditelné podle provozní doby
   const visibleSlots = ALL_SLOTS.slice(settings.openingSlot, settings.closingSlot + 2);
@@ -95,6 +188,13 @@ function TimelineTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
   const contentScrollRef = useRef<ScrollView>(null);
   const scrollXRef       = useRef(0);
   const [scrollEnabled, setScrollEnabled] = useState(true);
+
+  // Aktuální čas — aktualizuje se každou minutu (pro linku a zešednutí)
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), 60_000);
+    return () => clearInterval(id);
+  }, []);
 
   // Stav přetahování (X + Y)
   const [draggingId, setDraggingId]   = useState<string | null>(null);
@@ -181,24 +281,60 @@ function TimelineTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
   }, [bookingIds, courts]);
 
   const timelineWidth = visibleSlots.length * SLOT_W;
+  const timelineH = HEADER_H + courts.length * ROW_H + SCROLLBAR_H;
 
-  const timelineH = HEADER_H + courts.length * ROW_H;
+  // Pozice linky aktuálního času (px od začátku viditelné oblasti)
+  const nowMinutes     = now.getHours() * 60 + now.getMinutes();
+  const openingMinutes = SLOT_START_HOUR * 60 + settings.openingSlot * 30;
+  const nowLineX       = (nowMinutes - openingMinutes) / 30 * SLOT_W;
+  const nowLabel       = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+  const showNowLine    = isOnToday && nowLineX >= 0 && nowLineX <= timelineWidth;
 
   return (
     <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false}
       keyboardShouldPersistTaps="handled">
+      {/* Týdenní navigace */}
+      <View style={s.weekNav}>
+        <TouchableOpacity onPress={handlePrevWeek} style={s.weekNavArrow} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+          <Ionicons name="chevron-back" size={20} color={W.orange} />
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={s.weekNavLabel}
+          onPress={() => setCalendarVisible(true)}
+          hitSlop={{ top: 4, bottom: 4, left: 0, right: 0 }}
+          activeOpacity={0.7}
+        >
+          <Text style={s.weekNavText}>
+            {fmtShortDate(days[0])} – {fmtShortDate(days[6])}
+          </Text>
+          {weekOffset === 0 ? (
+            <View style={s.weekNavBadge}>
+              <Text style={s.weekNavBadgeText}>TENTO TÝDEN</Text>
+            </View>
+          ) : (
+            <Ionicons name="calendar-outline" size={13} color={W.orange} style={{ marginLeft: 4 }} />
+          )}
+        </TouchableOpacity>
+        <TouchableOpacity onPress={handleNextWeek} style={s.weekNavArrow} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+          <Ionicons name="chevron-forward" size={20} color={W.orange} />
+        </TouchableOpacity>
+      </View>
+
       {/* Výběr dne */}
-      <View style={s.datePicker}>
+      <View style={[s.datePicker, { flexDirection: 'row', alignItems: 'center' }]}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false}
+          style={{ flex: 1 }}
           contentContainerStyle={s.datePickerContent}>
           {days.map((day, i) => {
-            const fmt   = fmtDay(day);
-            const isSel = day.toISOString().slice(0, 10) === dateKey;
+            const fmt    = fmtDay(day);
+            const dayKey = day.toISOString().slice(0, 10);
+            const isSel  = dayKey === dateKey;
+            const isToday = dayKey === todayKey;
             return (
               <TouchableOpacity key={i} onPress={() => setSelectedDate(day)}
                 style={[s.dayChip, isSel && s.dayChipActive]}>
                 <Text style={[s.dayChipWD, isSel && { color: '#fff' }]}>
-                  {i === 0 ? 'DNES' : fmt.short}
+                  {isToday ? 'DNES' : fmt.short}
                 </Text>
                 <Text style={[s.dayChipNum, isSel && { color: '#fff' }]}>{fmt.num}</Text>
                 <Text style={[s.dayChipMonth, isSel && { color: 'rgba(255,255,255,0.7)' }]}>
@@ -208,6 +344,16 @@ function TimelineTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
             );
           })}
         </ScrollView>
+        {!isOnToday && (
+          <TouchableOpacity
+            onPress={handleGoToday}
+            style={s.todayBtn}
+            hitSlop={{ top: 8, bottom: 8, left: 4, right: 8 }}
+            activeOpacity={0.7}
+          >
+            <Text style={s.todayBtnText}>DNES</Text>
+          </TouchableOpacity>
+        )}
       </View>
 
       {/* Legenda platebního stavu */}
@@ -264,7 +410,7 @@ function TimelineTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
             horizontal
             ref={contentScrollRef}
             scrollEnabled={scrollEnabled}
-            style={{ height: courts.length * ROW_H }}
+            style={{ height: courts.length * ROW_H + SCROLLBAR_H }}
             showsHorizontalScrollIndicator
             onScroll={e => {
               const x = e.nativeEvent.contentOffset.x;
@@ -331,6 +477,51 @@ function TimelineTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
                 );
               })}
 
+              {/* Volné sloty — hover + ikona pro novou rezervaci */}
+              {courts.map((court, ci) =>
+                visibleSlots
+                  .filter(idx => idx <= settings.closingSlot)
+                  .filter(idx => !occupiedByCourt[court.id]?.has(idx))
+                  .map(slotIdx => {
+                    const slotKey = `${court.id}-${slotIdx}`;
+                    const isHovered = hoveredSlotKey === slotKey;
+                    const posInVisible = slotIdx - settings.openingSlot;
+                    const showIcon = Platform.OS !== 'web' || isHovered;
+                    const webHoverProps = Platform.OS === 'web'
+                      ? {
+                          onMouseEnter: () => setHoveredSlotKey(slotKey),
+                          onMouseLeave: () => setHoveredSlotKey(k => k === slotKey ? null : k),
+                        } as Record<string, unknown>
+                      : {};
+                    return (
+                      <View
+                        key={`free-${slotKey}`}
+                        style={[s.freeSlotCell, {
+                          left: posInVisible * SLOT_W,
+                          top:  ci * ROW_H,
+                          width: SLOT_W,
+                          height: ROW_H,
+                        }]}
+                        {...webHoverProps}
+                      >
+                        <TouchableOpacity
+                          style={s.freeSlotBtn}
+                          activeOpacity={0.7}
+                          onPress={() => setCreateDraft({ courtId: court.id, slotIdx })}
+                          hitSlop={{ top: 4, bottom: 4, left: 2, right: 2 }}
+                        >
+                          <Ionicons
+                            name="add-circle-outline"
+                            size={22}
+                            color="#6B7280"
+                            style={{ opacity: showIcon ? (Platform.OS === 'web' ? 1 : 0.4) : 0 }}
+                          />
+                        </TouchableOpacity>
+                      </View>
+                    );
+                  })
+              )}
+
               {/* Rezervační bloky */}
               {dayBooks.map(booking => {
                 const courtIdx = courts.findIndex(c => c.id === booking.court_id);
@@ -344,7 +535,10 @@ function TimelineTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
                 const rawLeft      = posInVisible * SLOT_W;
                 const displayLeft  = rawLeft + (isDragging ? dragOffsetX : 0);
                 const displayTop   = courtIdx * ROW_H + (isDragging ? dragOffsetY : 0);
-                const bgColor      = PAYMENT_BG[booking.payment_status] ?? '#94A3B8';
+                // Zešednutí: rezervace v minulosti (dnes, konec bloku před now)
+                const endMinutes  = SLOT_START_HOUR * 60 + (Math.max(...booking.slots) + 1) * 30;
+                const isPast      = isOnToday && endMinutes <= nowMinutes;
+                const bgColor     = isPast ? '#6B7280' : (PAYMENT_BG[booking.payment_status] ?? '#94A3B8');
 
                 return (
                   <View
@@ -383,15 +577,43 @@ function TimelineTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
                         {slotCount >= 2 ? ` · ${booking.price} Kč` : ''}
                       </Text>
                     </TouchableOpacity>
+                    {booking.note && (
+                      <TouchableOpacity
+                        style={s.noteIconBtn}
+                        onPress={() => setNoteTooltip(booking.note!)}
+                        hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                      >
+                        <Ionicons name="information-circle" size={14} color="rgba(255,255,255,0.92)" />
+                      </TouchableOpacity>
+                    )}
                   </View>
                 );
               })}
+
+              {/* Linka aktuálního času */}
+              {showNowLine && (
+                <>
+                  <View style={[s.nowLine, { left: nowLineX }]} />
+                  <View style={[s.nowBubble, { left: Math.max(2, nowLineX - 18) }]}>
+                    <Text style={s.nowBubbleText}>{nowLabel}</Text>
+                  </View>
+                </>
+              )}
             </View>
           </ScrollView>
         </View>
       </View>
 
-      <Text style={s.dragHint}>Táhněte blok rezervace pro přesunutí · klepněte pro detail</Text>
+      <Text style={s.dragHint}>Táhněte blok rezervace pro přesunutí · klepněte pro detail · volný slot pro novou rezervaci</Text>
+
+      {/* Výběr týdne — kalendář */}
+      <WeekPickerModal
+        visible={calendarVisible}
+        weekOffset={weekOffset}
+        onSelectWeek={handleSelectWeek}
+        onClose={() => setCalendarVisible(false)}
+        maxBookingDaysAhead={settings.maxBookingDaysAhead}
+      />
 
       {/* Detail rezervace */}
       {selectedBooking && (
@@ -409,7 +631,578 @@ function TimelineTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
           }}
         />
       )}
+
+      {/* Nová rezervace ze volného slotu */}
+      {createDraft && (
+        <ClubBookingCreateModal
+          court={courts.find(c => c.id === createDraft.courtId) ?? null}
+          date={selectedDate}
+          slotIdx={createDraft.slotIdx}
+          closingSlot={settings.closingSlot}
+          occupiedSlots={occupiedByCourt[createDraft.courtId] ?? new Set()}
+          onClose={() => setCreateDraft(null)}
+          onSave={(params) => {
+            const created = createBooking(params);
+            if (created) setCreateDraft(null);
+          }}
+        />
+      )}
+
+      {/* Tooltip poznámky */}
+      {noteTooltip !== null && (
+        <NoteTooltipModal note={noteTooltip} onClose={() => setNoteTooltip(null)} />
+      )}
     </ScrollView>
+  );
+}
+
+// ─── Tooltip poznámky rezervace ──────────────────────────────────────────────
+
+function NoteTooltipModal({ note, onClose }: { note: string; onClose: () => void }) {
+  return (
+    <Modal transparent animationType="fade" onRequestClose={onClose}>
+      <TouchableWithoutFeedback onPress={onClose}>
+        <View style={nt.overlay}>
+          <TouchableWithoutFeedback onPress={() => {}}>
+            <View style={nt.box}>
+              <View style={nt.header}>
+                <Ionicons name="information-circle" size={18} color={W.orange} />
+                <Text style={nt.label}>POZNÁMKA</Text>
+                <TouchableOpacity onPress={onClose} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                  <Ionicons name="close" size={16} color="rgba(255,255,255,0.5)" />
+                </TouchableOpacity>
+              </View>
+              <Text style={nt.text}>{note}</Text>
+            </View>
+          </TouchableWithoutFeedback>
+        </View>
+      </TouchableWithoutFeedback>
+    </Modal>
+  );
+}
+
+const nt = StyleSheet.create({
+  overlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 32,
+  },
+  box: {
+    backgroundColor: '#1C1C1E',
+    borderRadius: 10,
+    padding: 16,
+    width: '100%',
+    maxWidth: 320,
+    gap: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  label: {
+    flex: 1,
+    fontSize: 10,
+    fontWeight: '900',
+    color: W.orange,
+    letterSpacing: 1.2,
+  },
+  text: {
+    fontSize: 14,
+    color: '#F5F5F5',
+    lineHeight: 21,
+    fontWeight: '500',
+  },
+});
+
+// ─── Kalendářový výběr týdne ─────────────────────────────────────────────────
+
+function WeekPickerModal({ visible, weekOffset, onSelectWeek, onClose, maxBookingDaysAhead }: {
+  visible: boolean;
+  weekOffset: number;
+  onSelectWeek: (offset: number) => void;
+  onClose: () => void;
+  maxBookingDaysAhead: number;
+}) {
+  const [dispMonth, setDispMonth] = useState(0);
+  const [dispYear,  setDispYear]  = useState(() => new Date().getFullYear());
+
+  // Při otevření přeskočíme na měsíc aktuálně vybraného týdne
+  useEffect(() => {
+    if (visible) {
+      const d = getWeekDays(weekOffset)[0];
+      setDispMonth(d.getMonth());
+      setDispYear(d.getFullYear());
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible]);
+
+  const selectedWeekKeys = useMemo(
+    () => getWeekDays(weekOffset).map(d => d.toISOString().slice(0, 10)),
+    [weekOffset],
+  );
+  const todayKey = useMemo(() => new Date().toISOString().slice(0, 10), []);
+
+  // Poslední dostupný den pro rezervaci (inclusive)
+  const bookingDeadline = useMemo(() => {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    d.setDate(d.getDate() + maxBookingDaysAhead);
+    return d;
+  }, [maxBookingDaysAhead]);
+
+  // Mřížka: 6 řádků × 7 sloupců, začíná pondělím týdne obsahujícím 1. den měsíce
+  const rows = useMemo(() => {
+    const first = new Date(dispYear, dispMonth, 1);
+    const start = getMonday(first);
+    const all   = Array.from({ length: 42 }, (_, i) => {
+      const d = new Date(start);
+      d.setDate(d.getDate() + i);
+      return d;
+    });
+    const result: Date[][] = [];
+    for (let i = 0; i < 42; i += 7) result.push(all.slice(i, i + 7));
+    return result;
+  }, [dispYear, dispMonth]);
+
+  const goPrev = () => {
+    if (dispMonth === 0) { setDispMonth(11); setDispYear(y => y - 1); }
+    else setDispMonth(m => m - 1);
+  };
+  const goNext = () => {
+    if (dispMonth === 11) { setDispMonth(0); setDispYear(y => y + 1); }
+    else setDispMonth(m => m + 1);
+  };
+
+  const handleDayPress = (date: Date) => {
+    onSelectWeek(getWeekOffsetForDate(date));
+    onClose();
+  };
+
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <TouchableWithoutFeedback onPress={onClose}>
+        <View style={cal.overlay}>
+          <TouchableWithoutFeedback onPress={() => {}}>
+            <View style={cal.sheet}>
+              {/* Oranžový pruh */}
+              <View style={cal.topBar} />
+
+              {/* Záhlaví: šipky + název měsíce */}
+              <View style={cal.header}>
+                <TouchableOpacity onPress={goPrev} style={cal.navBtn}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                  <Ionicons name="chevron-back" size={20} color={W.orange} />
+                </TouchableOpacity>
+                <Text style={cal.monthLabel}>
+                  {MONTH_NAMES[dispMonth]} {dispYear}
+                </Text>
+                <TouchableOpacity onPress={goNext} style={cal.navBtn}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                  <Ionicons name="chevron-forward" size={20} color={W.orange} />
+                </TouchableOpacity>
+              </View>
+
+              {/* Popisky dní (Po–Ne) */}
+              <View style={cal.dayLabelsRow}>
+                {DAY_ABBR.map(label => (
+                  <View key={label} style={cal.dayLabelCell}>
+                    <Text style={cal.dayLabelText}>{label}</Text>
+                  </View>
+                ))}
+              </View>
+
+              {/* Mřížka dní — řádek = týden */}
+              {rows.map((row, ri) => {
+                const mondayKey = row[0].toISOString().slice(0, 10);
+                const isSelRow  = selectedWeekKeys.includes(mondayKey);
+                return (
+                  <View key={ri} style={[cal.gridRow, isSelRow && cal.gridRowSelected]}>
+                    {row.map((date, ci) => {
+                      const key      = date.toISOString().slice(0, 10);
+                      const inMonth  = date.getMonth() === dispMonth;
+                      const isSel    = selectedWeekKeys.includes(key);
+                      const isToday  = key === todayKey;
+                      const isFirst  = ci === 0;
+                      const isLast   = ci === 6;
+                      const dateNorm = new Date(date); dateNorm.setHours(0, 0, 0, 0);
+                      const isBeyond = dateNorm > bookingDeadline;
+                      return (
+                        <TouchableOpacity
+                          key={ci}
+                          onPress={() => handleDayPress(date)}
+                          activeOpacity={0.65}
+                          style={[
+                            cal.dayCell,
+                            isSelRow && isFirst && cal.dayCellLeft,
+                            isSelRow && isLast  && cal.dayCellRight,
+                          ]}
+                        >
+                          <Text style={[
+                            cal.dayNum,
+                            !inMonth && cal.dayNumFaded,
+                            isBeyond && inMonth && cal.dayNumBeyond,
+                            isSel && inMonth && cal.dayNumSelected,
+                          ]}>
+                            {date.getDate()}
+                          </Text>
+                          {isBeyond && inMonth && !isSel && (
+                            <Ionicons name="lock-closed-outline" size={7} color={colors.textDisabled} style={cal.beyondIcon} />
+                          )}
+                          {isToday && (
+                            <View style={[cal.todayDot, isSel && cal.todayDotSel]} />
+                          )}
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                );
+              })}
+
+              {/* Patička */}
+              <TouchableOpacity onPress={onClose} style={cal.footer}>
+                <Text style={cal.footerText}>ZAVŘÍT</Text>
+              </TouchableOpacity>
+            </View>
+          </TouchableWithoutFeedback>
+        </View>
+      </TouchableWithoutFeedback>
+    </Modal>
+  );
+}
+
+// ─── Nová rezervace (správce klubu) ──────────────────────────────────────────
+
+const DURATION_OPTIONS = [30, 60, 90, 120, 150, 180] as const;
+
+function slotsForDuration(startSlot: number, durationMinutes: number): number[] {
+  const count = durationMinutes / 30;
+  return Array.from({ length: count }, (_, i) => startSlot + i);
+}
+
+function isDurationValid(
+  durationMinutes: number,
+  startSlot: number,
+  closingSlot: number,
+  occupied: Set<number>,
+): boolean {
+  const slots = slotsForDuration(startSlot, durationMinutes);
+  if (Math.max(...slots) > closingSlot) return false;
+  return !slots.some(s => occupied.has(s));
+}
+
+type PlayerInputMode = 'registered' | 'manual';
+
+const PLAYER_RESULT_ROW_H = 52;
+const PLAYER_RESULTS_MAX_VISIBLE = 5;
+
+function filterRegisteredPlayers(players: RegisteredPlayer[], query: string): RegisteredPlayer[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return players;
+  return players.filter(p =>
+    p.first_name.toLowerCase().includes(q) ||
+    p.last_name.toLowerCase().includes(q) ||
+    p.email.toLowerCase().includes(q),
+  );
+}
+
+function ClubBookingCreateModal({ court, date, slotIdx, closingSlot, occupiedSlots, onClose, onSave }: {
+  court: CourtWithClub | null;
+  date: Date;
+  slotIdx: number;
+  closingSlot: number;
+  occupiedSlots: Set<number>;
+  onClose: () => void;
+  onSave: (params: {
+    courtId: string;
+    playerName: string;
+    date: string;
+    slots: number[];
+    price: number;
+    paymentStatus: PaymentStatus;
+    note?: string;
+  }) => void;
+}) {
+  const [durationMinutes, setDurationMinutes] = useState(60);
+  const [playerMode, setPlayerMode]           = useState<PlayerInputMode>('registered');
+  const [playerSearch, setPlayerSearch]       = useState('');
+  const [selectedPlayerId, setSelectedPlayerId] = useState<string | null>(null);
+  const [manualName, setManualName]           = useState('');
+  const [paymentStatus, setPaymentStatus]     = useState<PaymentStatus>('pay_on_site');
+  const [note, setNote]                       = useState('');
+  const [error, setError]                     = useState<string | null>(null);
+
+  const filteredPlayers = useMemo(
+    () => filterRegisteredPlayers(MOCK_REGISTERED_PLAYERS, playerSearch),
+    [playerSearch],
+  );
+  const selectedPlayer = useMemo(
+    () => MOCK_REGISTERED_PLAYERS.find(p => p.id === selectedPlayerId) ?? null,
+    [selectedPlayerId],
+  );
+
+  if (!court) return null;
+
+  const courtData = court;
+  const accent   = SPORT_COLORS[courtData.sport] ?? W.orange;
+  const dateKey  = date.toISOString().slice(0, 10);
+  const fmt      = fmtDay(date);
+  const slots    = slotsForDuration(slotIdx, durationMinutes);
+  const slotMax  = Math.max(...slots);
+  const price    = slotPrice(slots.length, courtData.price_per_hour);
+  const durationValid = isDurationValid(durationMinutes, slotIdx, closingSlot, occupiedSlots);
+  const playerValid = playerMode === 'manual'
+    ? manualName.trim().length > 0
+    : selectedPlayerId !== null;
+  const canSave = durationValid && playerValid;
+
+  function handleSave() {
+    if (!durationValid) {
+      setError('Vybraná délka přesahuje provozní dobu nebo koliduje s jinou rezervací.');
+      return;
+    }
+    let name = '';
+    if (playerMode === 'registered') {
+      const player = MOCK_REGISTERED_PLAYERS.find(p => p.id === selectedPlayerId);
+      name = player ? registeredPlayerFullName(player) : '';
+      if (!name) {
+        setError('Vyberte registrovaného hráče ze seznamu.');
+        return;
+      }
+    } else {
+      name = manualName.trim();
+      if (!name) {
+        setError('Zadejte jméno hráče.');
+        return;
+      }
+    }
+    setError(null);
+    onSave({
+      courtId:       courtData.id,
+      playerName:    name,
+      date:          dateKey,
+      slots,
+      price,
+      paymentStatus,
+      note:          note.trim() || undefined,
+    });
+  }
+
+  return (
+    <Modal visible transparent animationType="slide" onRequestClose={onClose}>
+      <View style={s.detailOverlay}>
+        <View style={s.detailSheet}>
+          <View style={s.modalHandle} />
+
+          <View style={[s.detailHeader, { backgroundColor: accent }]}>
+            <View style={{ flex: 1 }}>
+              <Text style={s.detailPayBadgeText}>NOVÁ REZERVACE</Text>
+              <Text style={s.detailPlayerName}>{courtData.name}</Text>
+              <Text style={[s.detailPayBadgeText, { marginTop: 4, opacity: 0.85 }]}>
+                {fmt.short} {fmt.num}. {fmt.month} · {slotToTime(slotIdx)}–{slotEndTime(slotMax)} · {price} Kč
+              </Text>
+            </View>
+            <TouchableOpacity onPress={onClose} style={s.detailCloseBtn}>
+              <Ionicons name="close" size={22} color="rgba(255,255,255,0.85)" />
+            </TouchableOpacity>
+          </View>
+
+          <ScrollView keyboardShouldPersistTaps="handled">
+            <View style={s.detailRows}>
+              <Text style={s.fieldLabel}>DÉLKA REZERVACE</Text>
+              <View style={s.chipRow}>
+                {DURATION_OPTIONS.map(mins => {
+                  const valid = isDurationValid(mins, slotIdx, closingSlot, occupiedSlots);
+                  const selected = durationMinutes === mins;
+                  return (
+                    <TouchableOpacity
+                      key={mins}
+                      disabled={!valid}
+                      onPress={() => { setDurationMinutes(mins); setError(null); }}
+                      style={[
+                        s.chip,
+                        selected && { backgroundColor: accent, borderColor: 'transparent' },
+                        !valid && { opacity: 0.35 },
+                      ]}
+                    >
+                      <Text style={[s.chipText, selected && { color: '#fff' }]}>
+                        {slotDuration(mins / 30)}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+              {!durationValid && (
+                <Text style={{ fontSize: 12, color: colors.error, marginTop: 4 }}>
+                  Vybraná délka přesahuje provozní dobu nebo koliduje s jinou rezervací.
+                </Text>
+              )}
+
+              <Text style={[s.fieldLabel, { marginTop: 16 }]}>HRÁČ</Text>
+              <View style={s.chipRow}>
+                <TouchableOpacity
+                  onPress={() => { setPlayerMode('registered'); setError(null); }}
+                  style={[
+                    s.chip,
+                    playerMode === 'registered' && { backgroundColor: W.orange, borderColor: 'transparent' },
+                  ]}
+                >
+                  <Text style={[s.chipText, playerMode === 'registered' && { color: '#fff' }]}>
+                    Registrovaný uživatel
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={() => { setPlayerMode('manual'); setError(null); }}
+                  style={[
+                    s.chip,
+                    playerMode === 'manual' && { backgroundColor: W.orange, borderColor: 'transparent' },
+                  ]}
+                >
+                  <Text style={[s.chipText, playerMode === 'manual' && { color: '#fff' }]}>
+                    Ručně zadat jméno
+                  </Text>
+                </TouchableOpacity>
+              </View>
+
+              {playerMode === 'registered' ? (
+                <View style={{ marginTop: 4 }}>
+                  <TextInput
+                    style={s.fieldInput}
+                    value={playerSearch}
+                    onChangeText={text => { setPlayerSearch(text); setError(null); }}
+                    placeholder="Hledat podle jména, příjmení nebo e-mailu…"
+                    placeholderTextColor={colors.textDisabled}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                  />
+
+                  {selectedPlayer && (
+                    <View style={[s.chipRow, { marginTop: 8 }]}>
+                      <View style={[s.chip, s.playerSelectedChip]}>
+                        <Text style={[s.chipText, { color: '#fff' }]}>
+                          {registeredPlayerFullName(selectedPlayer)}
+                        </Text>
+                        <TouchableOpacity
+                          onPress={() => { setSelectedPlayerId(null); setError(null); }}
+                          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                        >
+                          <Ionicons name="close-circle" size={16} color="rgba(255,255,255,0.85)" />
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  )}
+
+                  {filteredPlayers.length === 0 ? (
+                    playerSearch.trim().length > 0 && (
+                      <Text style={s.playerSearchEmpty}>Žádný uživatel nenalezen</Text>
+                    )
+                  ) : (
+                    <ScrollView
+                      style={[
+                        s.playerResultsList,
+                        { maxHeight: PLAYER_RESULT_ROW_H * PLAYER_RESULTS_MAX_VISIBLE },
+                      ]}
+                      keyboardShouldPersistTaps="handled"
+                      nestedScrollEnabled
+                    >
+                      {filteredPlayers.map(p => {
+                        const isSelected = selectedPlayerId === p.id;
+                        return (
+                          <TouchableOpacity
+                            key={p.id}
+                            onPress={() => { setSelectedPlayerId(p.id); setError(null); }}
+                            style={[
+                              s.playerResultRow,
+                              isSelected && s.playerResultRowSelected,
+                            ]}
+                          >
+                            <Text style={[
+                              s.playerResultName,
+                              isSelected && s.playerResultNameSelected,
+                            ]}>
+                              {registeredPlayerFullName(p)}
+                            </Text>
+                            <Text style={[
+                              s.playerResultEmail,
+                              isSelected && s.playerResultEmailSelected,
+                            ]}>
+                              {p.email}
+                            </Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </ScrollView>
+                  )}
+                </View>
+              ) : (
+                <TextInput
+                  style={s.fieldInput}
+                  value={manualName}
+                  onChangeText={setManualName}
+                  placeholder="Jan Novák"
+                  placeholderTextColor={colors.textDisabled}
+                  autoFocus={Platform.OS === 'web'}
+                />
+              )}
+              {error && <Text style={{ fontSize: 12, color: colors.error, marginTop: 4 }}>{error}</Text>}
+
+              <Text style={[s.fieldLabel, { marginTop: 16 }]}>PLATEBNÍ STAV</Text>
+              <View style={s.detailPayRow}>
+                {(Object.keys(PAYMENT_BG) as PaymentStatus[]).map(k => (
+                  <TouchableOpacity
+                    key={k}
+                    onPress={() => setPaymentStatus(k)}
+                    style={[
+                      s.detailPayChip,
+                      { borderColor: PAYMENT_BG[k] },
+                      paymentStatus === k && { backgroundColor: PAYMENT_BG[k] },
+                    ]}
+                  >
+                    <Text style={[
+                      s.detailPayChipText,
+                      paymentStatus === k ? { color: '#fff' } : { color: PAYMENT_BG[k] },
+                    ]}>
+                      {PAYMENT_LABEL[k]}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              <Text style={[s.fieldLabel, { marginTop: 16 }]}>POZNÁMKA (VOLITELNÉ)</Text>
+              <TextInput
+                style={[s.fieldInput, { minHeight: 72, textAlignVertical: 'top' }]}
+                value={note}
+                onChangeText={setNote}
+                placeholder="Poznámka k rezervaci…"
+                placeholderTextColor={colors.textDisabled}
+                multiline
+                numberOfLines={3}
+              />
+            </View>
+
+            <TouchableOpacity
+              onPress={handleSave}
+              disabled={!canSave}
+              style={[
+                s.saveBtn,
+                { backgroundColor: accent, marginHorizontal: 16, marginTop: 8 },
+                !canSave && { opacity: 0.5 },
+              ]}
+            >
+              <Text style={s.saveBtnText}>VYTVOŘIT REZERVACI</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={onClose} style={s.cancelModalBtn}>
+              <Text style={s.cancelModalText}>Zrušit</Text>
+            </TouchableOpacity>
+            <View style={{ height: 24 }} />
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
   );
 }
 
@@ -464,6 +1257,12 @@ function BookingDetailModal({ booking, court, onClose, onUpdatePayment, onCancel
                 value={court?.name ?? booking.court_id} />
               <DetailRow icon="cash-outline" label="Cena"
                 value={`${booking.price} Kč`} accent={accent} />
+              {booking.note && (
+                <View style={s.detailNoteRow}>
+                  <Ionicons name="information-circle-outline" size={16} color={W.orange} style={{ width: 22 }} />
+                  <Text style={s.detailNoteText}>{booking.note}</Text>
+                </View>
+              )}
             </View>
 
             {/* Změna platebního stavu */}
@@ -803,6 +1602,32 @@ function SettingsTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
         </View>
       </View>
 
+      {/* Rezervace dopředu */}
+      <View style={s.settingCard}>
+        <View style={[s.settingCardBar, { backgroundColor: colors.success }]} />
+        <View style={s.settingCardBody}>
+          <Text style={s.settingCardTitle}>Rezervace dopředu</Text>
+          <Text style={s.settingCardSub}>
+            Hráč může rezervovat nejvýše{' '}
+            <Text style={{ fontWeight: '900' }}>{settings.maxBookingDaysAhead} dní</Text>
+            {' '}dopředu.
+          </Text>
+          <View style={s.stepperRow}>
+            <TouchableOpacity
+              onPress={() => updateSettings({ maxBookingDaysAhead: Math.max(1, settings.maxBookingDaysAhead - 1) })}
+              style={[s.stepperBtn, { backgroundColor: colors.success }]}>
+              <Text style={s.stepperBtnText}>−</Text>
+            </TouchableOpacity>
+            <Text style={s.stepperValue}>{settings.maxBookingDaysAhead} d</Text>
+            <TouchableOpacity
+              onPress={() => updateSettings({ maxBookingDaysAhead: Math.min(365, settings.maxBookingDaysAhead + 1) })}
+              style={[s.stepperBtn, { backgroundColor: colors.success }]}>
+              <Text style={s.stepperBtnText}>+</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+
       {/* Info tile — budoucí nastavení */}
       <View style={[s.settingCard, { opacity: 0.5 }]}>
         <View style={[s.settingCardBar, { backgroundColor: colors.textDisabled }]} />
@@ -828,6 +1653,16 @@ const s = StyleSheet.create({
   tabActive: { borderBottomColor: W.orange },
   tabText: { fontSize: 11, fontWeight: '800', color: colors.textMuted, letterSpacing: 1 },
   tabTextActive: { color: colors.textPrimary },
+
+  // Week navigation bar
+  weekNav: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.surface, borderBottomWidth: 1, borderBottomColor: colors.border, paddingHorizontal: 4 },
+  weekNavArrow: { padding: 12 },
+  weekNavLabel: { flex: 1, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8, paddingVertical: 10 },
+  weekNavText: { fontSize: 14, fontWeight: '800', color: colors.textPrimary, letterSpacing: 0.3 },
+  weekNavBadge: { backgroundColor: W.orange, paddingHorizontal: 7, paddingVertical: 2 },
+  weekNavBadgeText: { fontSize: 9, fontWeight: '900', color: '#fff', letterSpacing: 1 },
+  todayBtn: { paddingHorizontal: 9, paddingVertical: 6, borderWidth: 1.5, borderColor: W.orange, marginHorizontal: 8, alignSelf: 'center' },
+  todayBtnText: { fontSize: 9, fontWeight: '900', color: W.orange, letterSpacing: 1 },
 
   // Date picker
   datePicker: { backgroundColor: colors.surface, borderBottomWidth: 1, borderBottomColor: colors.border },
@@ -863,6 +1698,8 @@ const s = StyleSheet.create({
   gridVLine:    { position: 'absolute', top: 0, bottom: 0, width: 1, backgroundColor: colors.border },
   gridHLine:    { position: 'absolute', left: 0, right: 0, height: 1, backgroundColor: colors.border },
   closedOverlay: { position: 'absolute', backgroundColor: 'rgba(0,0,0,0.04)' },
+  freeSlotCell:  { position: 'absolute', zIndex: 0, justifyContent: 'center', alignItems: 'center' },
+  freeSlotBtn:   { flex: 1, width: '100%', justifyContent: 'center', alignItems: 'center' },
   dropTarget:   { position: 'absolute', backgroundColor: 'rgba(99,102,241,0.12)', borderWidth: 2, borderColor: 'rgba(99,102,241,0.4)', borderStyle: 'dashed' },
 
   // Rezervační blok
@@ -870,6 +1707,12 @@ const s = StyleSheet.create({
   bookingInner: { flex: 1, paddingHorizontal: 6, paddingVertical: 5, justifyContent: 'center' },
   bookingName:  { fontSize: 11, fontWeight: '800', color: '#fff', lineHeight: 15 },
   bookingMeta:  { fontSize: 9,  color: 'rgba(255,255,255,0.85)', marginTop: 1 },
+  noteIconBtn:  { position: 'absolute', top: 3, right: 3, zIndex: 10 },
+
+  // Linka aktuálního času
+  nowLine:       { position: 'absolute', top: 0, bottom: 0, width: 2, backgroundColor: '#EF4444', zIndex: 15, shadowColor: '#EF4444', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.6, shadowRadius: 3 },
+  nowBubble:     { position: 'absolute', top: 2, backgroundColor: '#EF4444', paddingHorizontal: 4, paddingVertical: 2, zIndex: 16 },
+  nowBubbleText: { fontSize: 9, fontWeight: '900', color: '#fff', letterSpacing: 0.5 },
 
   dragHint: { fontSize: 10, color: colors.textDisabled, textAlign: 'center', paddingVertical: 6, fontStyle: 'italic' },
 
@@ -896,6 +1739,37 @@ const s = StyleSheet.create({
   chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8 },
   chip: { paddingHorizontal: 12, paddingVertical: 7, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.bgAlt },
   chipText: { fontSize: 12, fontWeight: '700', color: colors.textSecondary },
+  playerSelectedChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#16A34A',
+    borderColor: 'transparent',
+  },
+  playerResultsList: {
+    marginTop: 8,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.bgAlt,
+  },
+  playerResultRow: {
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+    minHeight: PLAYER_RESULT_ROW_H,
+    justifyContent: 'center',
+  },
+  playerResultRowSelected: {
+    backgroundColor: 'rgba(22,163,74,0.15)',
+    borderLeftWidth: 3,
+    borderLeftColor: '#16A34A',
+  },
+  playerResultName: { fontSize: 14, fontWeight: '700', color: colors.textPrimary },
+  playerResultNameSelected: { color: '#16A34A' },
+  playerResultEmail: { fontSize: 12, color: colors.textMuted, marginTop: 2 },
+  playerResultEmailSelected: { color: 'rgba(22,163,74,0.85)' },
+  playerSearchEmpty: { fontSize: 13, color: colors.textMuted, marginTop: 10, fontStyle: 'italic' },
   switchRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: colors.border },
   switchLabel: { fontSize: 14, fontWeight: '700', color: colors.textPrimary },
   stepperRow: { flexDirection: 'row', alignItems: 'center', gap: 16, marginTop: 10 },
@@ -937,6 +1811,8 @@ const s = StyleSheet.create({
   detailPayRow: { flexDirection: 'row', gap: 8, paddingHorizontal: 16, flexWrap: 'wrap' },
   detailPayChip: { paddingHorizontal: 12, paddingVertical: 8, borderWidth: 2 },
   detailPayChipText: { fontSize: 11, fontWeight: '800' },
+  detailNoteRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, paddingTop: 4 },
+  detailNoteText: { flex: 1, fontSize: 13, color: colors.textSecondary, lineHeight: 19, fontStyle: 'italic' },
   detailCancelBtn: { flexDirection: 'row', alignItems: 'center', gap: 8, margin: 16, marginTop: 20, padding: 14, borderWidth: 1, borderColor: colors.error },
   detailCancelText: { fontSize: 13, fontWeight: '700', color: colors.error },
   detailConfirmCancel: { margin: 16, marginTop: 20, padding: 16, backgroundColor: '#FEE2E2', gap: 12 },
@@ -946,4 +1822,122 @@ const s = StyleSheet.create({
   detailConfirmNoText: { fontSize: 13, fontWeight: '700', color: colors.textSecondary },
   detailConfirmYes: { flex: 2, height: 44, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.error },
   detailConfirmYesText: { fontSize: 12, fontWeight: '900', color: '#fff', letterSpacing: 1 },
+});
+
+// ─── Styly kalendáře ──────────────────────────────────────────────────────────
+
+const cal = StyleSheet.create({
+  overlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  sheet: {
+    backgroundColor: colors.surface,
+    width: '100%',
+    maxWidth: 360,
+    overflow: 'hidden',
+  },
+  topBar: {
+    height: 4,
+    backgroundColor: W.orange,
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  navBtn: { padding: 4 },
+  monthLabel: {
+    flex: 1,
+    textAlign: 'center',
+    fontSize: 15,
+    fontWeight: '800',
+    color: colors.textPrimary,
+    letterSpacing: 0.3,
+  },
+  dayLabelsRow: {
+    flexDirection: 'row',
+    paddingTop: 10,
+    paddingBottom: 4,
+  },
+  dayLabelCell: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  dayLabelText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: colors.textMuted,
+    letterSpacing: 0.8,
+  },
+  gridRow: {
+    flexDirection: 'row',
+  },
+  gridRowSelected: {
+    backgroundColor: 'rgba(249,115,22,0.12)',
+  },
+  dayCell: {
+    flex: 1,
+    aspectRatio: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  dayCellLeft: {
+    borderTopLeftRadius: 4,
+    borderBottomLeftRadius: 4,
+  },
+  dayCellRight: {
+    borderTopRightRadius: 4,
+    borderBottomRightRadius: 4,
+  },
+  dayNum: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: colors.textPrimary,
+  },
+  dayNumFaded: {
+    color: colors.textDisabled,
+  },
+  dayNumBeyond: {
+    color: colors.textDisabled,
+    opacity: 0.6,
+  },
+  beyondIcon: {
+    position: 'absolute',
+    bottom: 3,
+  },
+  dayNumSelected: {
+    color: W.orange,
+    fontWeight: '900',
+  },
+  todayDot: {
+    position: 'absolute',
+    bottom: 5,
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: colors.textMuted,
+  },
+  todayDotSel: {
+    backgroundColor: W.orange,
+  },
+  footer: {
+    alignItems: 'center',
+    paddingVertical: 13,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+    marginTop: 4,
+  },
+  footerText: {
+    fontSize: 11,
+    fontWeight: '900',
+    color: colors.textMuted,
+    letterSpacing: 1.5,
+  },
 });

@@ -93,13 +93,15 @@ export interface ClubBooking {
   price: number;
   payment_status: PaymentStatus;
   status: 'confirmed' | 'cancelled';
+  note?: string;
 }
 
 /** Nastavení klubu — editační zámek, provozní doba */
 export interface ClubSettings {
-  editLockHours: number;  // počet hodin před začátkem, kdy hráč nesmí editovat
-  openingSlot: number;    // index prvního slotu dne (výchozí 0 = 7:00)
-  closingSlot: number;    // index posledního slotu dne (výchozí 29 = 21:30)
+  editLockHours: number;        // počet hodin před začátkem, kdy hráč nesmí editovat
+  openingSlot: number;          // index prvního slotu dne (0–47; 0 = 0:00, 14 = 7:00)
+  closingSlot: number;          // index posledního slotu dne (0–47; 43 = 21:30, 47 = 23:30 → konec 24:00)
+  maxBookingDaysAhead: number;  // počet dní dopředu, kdy je možné rezervovat (1–365)
 }
 
 export type MatchStatus = 'scheduled' | 'in_progress' | 'completed' | 'cancelled';

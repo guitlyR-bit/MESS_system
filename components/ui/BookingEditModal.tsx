@@ -9,7 +9,7 @@
 import { useState } from 'react';
 import {
   Modal, View, Text, ScrollView,
-  TouchableOpacity, StyleSheet, Pressable,
+  TouchableOpacity, StyleSheet, Pressable, TextInput,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '@/lib/theme';
@@ -45,6 +45,7 @@ interface Props {
     courtId?: string; courtName?: string; courtSport?: string;
     clubName?: string; clubCity?: string;
     date: string; slots: number[]; price: number;
+    note?: string;
   }) => void;
   getBookedSlotsExcluding: (courtId: string, date: string, bookingId: string) => number[];
 }
@@ -58,6 +59,7 @@ export function BookingEditModal({
   const [selectedSlots, setSelectedSlots] = useState<number[]>([]);
   const [selectedCourt, setSelectedCourt] = useState<CourtWithClub | null>(null);
   const [doneMessage, setDoneMessage]   = useState('');
+  const [note, setNote]                 = useState(booking?.notes ?? '');
 
   // Sportoviště/klub aktuální rezervace — pro filtrování kurtů
   const currentClubId = MOCK_COURTS.find(c => c.id === booking?.court_id)?.club_id ?? '';
@@ -91,6 +93,7 @@ export function BookingEditModal({
       date:  dateKey,
       slots: selectedSlots,
       price: slotPrice(selectedSlots.length, /* pricePerHour */ getPricePerHour()),
+      note:  note.trim() || undefined,
     });
     setDoneMessage('Čas rezervace byl změněn.');
     setView('done');
@@ -115,6 +118,7 @@ export function BookingEditModal({
       date:       dateKey,
       slots:      selectedSlots,
       price:      slotPrice(selectedSlots.length, selectedCourt.price_per_hour),
+      note:       note.trim() || undefined,
     });
     setDoneMessage('Kurt a čas rezervace byly změněny.');
     setView('done');
@@ -154,6 +158,8 @@ export function BookingEditModal({
             <OptionsView
               booking={booking}
               accent={accent}
+              note={note}
+              onNoteChange={setNote}
               onChangeTime={() => {
                 setSelectedDate(new Date(booking.starts_at));
                 setSelectedSlots(booking.slots ?? []);
@@ -284,62 +290,80 @@ function CourtHalfIcon({ size = 22, color = '#fff' }: { size?: number; color?: s
 
 // ─── OPTIONS ─────────────────────────────────────────────────────────────────
 
-function OptionsView({ booking, accent, onChangeTime, onChangeCourt, onCancel, onClose }: {
+function OptionsView({ booking, accent, note, onNoteChange, onChangeTime, onChangeCourt, onCancel, onClose }: {
   booking: BookingWithCourt; accent: string;
+  note: string; onNoteChange: (v: string) => void;
   onChangeTime: () => void; onChangeCourt: () => void;
   onCancel: () => void; onClose: () => void;
 }) {
   const start = new Date(booking.starts_at);
   const fmt   = fmtDay(start);
   return (
-    <View style={s.section}>
-      <Text style={s.sheetTitle}>UPRAVIT REZERVACI</Text>
+    <ScrollView keyboardShouldPersistTaps="handled">
+      <View style={s.section}>
+        <Text style={s.sheetTitle}>UPRAVIT REZERVACI</Text>
 
-      {/* Mini shrnutí */}
-      <View style={[s.summaryBox, { borderLeftColor: accent }]}>
-        <Text style={s.summaryName}>{booking.court_name}</Text>
-        <Text style={s.summarySub}>{booking.club_name}</Text>
-        <Text style={s.summarySub}>
-          {fmt.short} {fmt.num}. {fmt.month} · {booking.price} Kč
-        </Text>
+        {/* Mini shrnutí */}
+        <View style={[s.summaryBox, { borderLeftColor: accent }]}>
+          <Text style={s.summaryName}>{booking.court_name}</Text>
+          <Text style={s.summarySub}>{booking.club_name}</Text>
+          <Text style={s.summarySub}>
+            {fmt.short} {fmt.num}. {fmt.month} · {booking.price} Kč
+          </Text>
+        </View>
+
+        {/* Pole pro poznámku */}
+        <View style={s.noteSection}>
+          <Text style={s.noteLabel}>POZNÁMKA</Text>
+          <TextInput
+            style={s.noteInput}
+            value={note}
+            onChangeText={onNoteChange}
+            placeholder="Přidat poznámku..."
+            placeholderTextColor={colors.textDisabled}
+            multiline
+            numberOfLines={3}
+            textAlignVertical="top"
+          />
+        </View>
+
+        <TouchableOpacity onPress={onChangeTime} style={s.optionBtn}>
+          <View style={[s.optionIcon, { backgroundColor: accent }]}>
+            <Ionicons name="time-outline" size={22} color="#fff" />
+          </View>
+          <View style={s.optionText}>
+            <Text style={s.optionTitle}>Změnit čas</Text>
+            <Text style={s.optionSub}>Vyberte jiný datum nebo čas na stejném kurtu</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={18} color={colors.borderStrong} />
+        </TouchableOpacity>
+
+        <TouchableOpacity onPress={onChangeCourt} style={s.optionBtn}>
+          <View style={[s.optionIcon, { backgroundColor: accent }]}>
+            <CourtHalfIcon size={22} color="#fff" />
+          </View>
+          <View style={s.optionText}>
+            <Text style={s.optionTitle}>Změnit kurt</Text>
+            <Text style={s.optionSub}>Vyberte jiný kurt na tomto sportovišti</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={18} color={colors.borderStrong} />
+        </TouchableOpacity>
+
+        <TouchableOpacity onPress={onCancel} style={[s.optionBtn, s.optionBtnDanger]}>
+          <View style={[s.optionIcon, { backgroundColor: colors.error }]}>
+            <Ionicons name="close-outline" size={24} color="#fff" />
+          </View>
+          <View style={s.optionText}>
+            <Text style={[s.optionTitle, { color: colors.error }]}>Zrušit rezervaci</Text>
+            <Text style={s.optionSub}>Tato akce je nevratná</Text>
+          </View>
+        </TouchableOpacity>
+
+        <TouchableOpacity onPress={onClose} style={s.closeBtn}>
+          <Text style={s.closeBtnText}>Zavřít</Text>
+        </TouchableOpacity>
       </View>
-
-      <TouchableOpacity onPress={onChangeTime} style={s.optionBtn}>
-        <View style={[s.optionIcon, { backgroundColor: accent }]}>
-          <Ionicons name="time-outline" size={22} color="#fff" />
-        </View>
-        <View style={s.optionText}>
-          <Text style={s.optionTitle}>Změnit čas</Text>
-          <Text style={s.optionSub}>Vyberte jiný datum nebo čas na stejném kurtu</Text>
-        </View>
-        <Ionicons name="chevron-forward" size={18} color={colors.borderStrong} />
-      </TouchableOpacity>
-
-      <TouchableOpacity onPress={onChangeCourt} style={s.optionBtn}>
-        <View style={[s.optionIcon, { backgroundColor: accent }]}>
-          <CourtHalfIcon size={22} color="#fff" />
-        </View>
-        <View style={s.optionText}>
-          <Text style={s.optionTitle}>Změnit kurt</Text>
-          <Text style={s.optionSub}>Vyberte jiný kurt na tomto sportovišti</Text>
-        </View>
-        <Ionicons name="chevron-forward" size={18} color={colors.borderStrong} />
-      </TouchableOpacity>
-
-      <TouchableOpacity onPress={onCancel} style={[s.optionBtn, s.optionBtnDanger]}>
-        <View style={[s.optionIcon, { backgroundColor: colors.error }]}>
-          <Ionicons name="close-outline" size={24} color="#fff" />
-        </View>
-        <View style={s.optionText}>
-          <Text style={[s.optionTitle, { color: colors.error }]}>Zrušit rezervaci</Text>
-          <Text style={s.optionSub}>Tato akce je nevratná</Text>
-        </View>
-      </TouchableOpacity>
-
-      <TouchableOpacity onPress={onClose} style={s.closeBtn}>
-        <Text style={s.closeBtnText}>Zavřít</Text>
-      </TouchableOpacity>
-    </View>
+    </ScrollView>
   );
 }
 
@@ -631,6 +655,18 @@ const s = StyleSheet.create({
   },
   summaryName: { fontSize: 15, fontWeight: '800', color: colors.textPrimary },
   summarySub:  { fontSize: 12, color: colors.textMuted },
+
+  noteSection: { gap: 6, marginTop: 4 },
+  noteLabel: {
+    fontSize: 10, fontWeight: '800', color: colors.textMuted, letterSpacing: 1,
+  },
+  noteInput: {
+    borderWidth: 1, borderColor: colors.border,
+    paddingHorizontal: 12, paddingVertical: 10,
+    fontSize: 14, color: colors.textPrimary,
+    backgroundColor: colors.bgAlt,
+    minHeight: 72,
+  },
 
   optionBtn: {
     flexDirection: 'row', alignItems: 'center', gap: 14,

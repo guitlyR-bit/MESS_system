@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react';
-import type { ClubBooking, ClubSettings, CourtWithClub } from '@/types/database';
+import type { ClubBooking, ClubSettings, CourtWithClub, PaymentStatus } from '@/types/database';
 import {
   MOCK_CLUB_BOOKINGS,
   MOCK_CLUB_SETTINGS,
@@ -56,6 +56,43 @@ export function useClubBookings() {
     setBookings(prev => prev.map(b => b.id === id ? { ...b, ...updates } : b));
   }, []);
 
+  /** Vytvoří novou rezervaci (správce klubu) */
+  const createBooking = useCallback((params: {
+    courtId: string;
+    playerName: string;
+    date: string;
+    slots: number[];
+    price: number;
+    paymentStatus: PaymentStatus;
+    note?: string;
+  }): ClubBooking | null => {
+    const slotMin = Math.min(...params.slots);
+    const slotMax = Math.max(...params.slots);
+    const conflict = bookings.some(b =>
+      b.date === params.date
+      && b.status !== 'cancelled'
+      && b.court_id === params.courtId
+      && params.slots.some(s => b.slots.includes(s))
+    );
+    if (conflict) return null;
+
+    const newBooking: ClubBooking = {
+      id:              `cb_${Date.now()}`,
+      court_id:        params.courtId,
+      player_name:     params.playerName.trim(),
+      date:            params.date,
+      starts_at:       `${params.date}T${slotToTime(slotMin)}:00.000Z`,
+      ends_at:         `${params.date}T${slotEndTime(slotMax)}:00.000Z`,
+      slots:           [...params.slots].sort((a, b) => a - b),
+      price:           params.price,
+      payment_status:  params.paymentStatus,
+      status:          'confirmed',
+      ...(params.note?.trim() ? { note: params.note.trim() } : {}),
+    };
+    setBookings(prev => [...prev, newBooking]);
+    return newBooking;
+  }, [bookings]);
+
   /** Ověří, zda hráč smí editovat (slot je dál než editLockHours) */
   const canPlayerEdit = useCallback((booking: ClubBooking): boolean => {
     const startsMs  = new Date(booking.starts_at).getTime();
@@ -66,7 +103,7 @@ export function useClubBookings() {
 
   return {
     bookings, settings, courts,
-    moveBooking, updateBooking, updateCourt, updateSettings,
+    moveBooking, updateBooking, createBooking, updateCourt, updateSettings,
     getBookingsForDate, canPlayerEdit,
   };
 }

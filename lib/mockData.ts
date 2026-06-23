@@ -163,11 +163,11 @@ export const MOCK_COURTS: CourtWithClub[] = [
 
 // ─── Sloty — 30minutové bloky ─────────────────────────────────────────────────
 //
-//  Index 0 = 7:00, 1 = 7:30, 2 = 8:00 … 29 = 21:30
-//  Celkem 30 slotů za den (7:00 – 22:00)
+//  Index 0 = 0:00, 1 = 0:30, … 14 = 7:00, … 47 = 23:30
+//  Celkem 48 slotů za den (0:00 – 24:00), provozní doba nastavitelná přes ClubSettings
 
-export const SLOT_COUNT      = 30;
-export const SLOT_START_HOUR = 7;
+export const SLOT_COUNT      = 48;
+export const SLOT_START_HOUR = 0;
 export const ALL_SLOTS: number[] = Array.from({ length: SLOT_COUNT }, (_, i) => i);
 
 /** Slot index → zobrazitelný čas ('07:00', '07:30', …) */
@@ -203,20 +203,20 @@ type BookedSlots = Record<string, Record<string, number[]>>;
 
 export const MOCK_BOOKED_SLOTS: BookedSlots = {
   c1: {
-    [todayStr(0)]: [4, 5, 6, 14, 15, 16, 17],    // 9:00–10:30, 14:00–15:30
-    [todayStr(1)]: [2, 3, 10, 11, 22, 23],
-    [todayStr(2)]: [6, 7, 8, 18, 19],
+    [todayStr(0)]: [18, 19, 20, 28, 29, 30, 31],    // 9:00–10:30, 14:00–15:30
+    [todayStr(1)]: [16, 17, 24, 25, 36, 37],
+    [todayStr(2)]: [20, 21, 22, 32, 33],
   },
   c2: {
-    [todayStr(0)]: [2, 3, 12, 13, 24, 25],
-    [todayStr(1)]: [4, 5, 20, 21],
+    [todayStr(0)]: [16, 17, 26, 27, 38, 39],
+    [todayStr(1)]: [18, 19, 34, 35],
   },
   c3: {
-    [todayStr(0)]: [0, 1, 2, 3, 4, 5, 22, 23, 24, 25, 26], // ráno a večer obsazeno
-    [todayStr(1)]: [6, 7, 8],
+    [todayStr(0)]: [14, 15, 16, 17, 18, 19, 36, 37, 38, 39, 40], // ráno a večer obsazeno
+    [todayStr(1)]: [20, 21, 22],
   },
   c5: {
-    [todayStr(0)]: [2, 3, 10, 11, 26, 27],
+    [todayStr(0)]: [16, 17, 24, 25, 40, 41],
   },
 };
 
@@ -235,7 +235,7 @@ export const MOCK_MY_BOOKINGS: BookingWithCourt[] = [
     ends_at:   todayISO(1, 11),
     status: 'confirmed',
     price: 250,
-    slots: [6, 7],   // 10:00–11:00
+    slots: [20, 21],  // 10:00–11:00
     created_at: new Date().toISOString(),
   },
   {
@@ -250,7 +250,7 @@ export const MOCK_MY_BOOKINGS: BookingWithCourt[] = [
     ends_at:   todayISO(3, 18),
     status: 'confirmed',
     price: 180,
-    slots: [20, 21],  // 17:00–18:00
+    slots: [34, 35],  // 17:00–18:00
     created_at: new Date().toISOString(),
   },
 ];
@@ -316,12 +316,37 @@ export const SURFACE_LABELS: Record<string, string> = {
   indoor:  'Hala',
 };
 
+// ─── Registrovaní hráči (pro výběr správcem klubu) ───────────────────────────
+
+export interface RegisteredPlayer {
+  id: string;
+  first_name: string;
+  last_name: string;
+  email: string;
+}
+
+export function registeredPlayerFullName(p: RegisteredPlayer): string {
+  return `${p.first_name} ${p.last_name}`;
+}
+
+export const MOCK_REGISTERED_PLAYERS: RegisteredPlayer[] = [
+  { id: 'rp1', first_name: 'Jan',       last_name: 'Novák',        email: 'jan.novak@gmail.com' },
+  { id: 'rp2', first_name: 'Petra',     last_name: 'Marková',      email: 'petra.markova@seznam.cz' },
+  { id: 'rp3', first_name: 'Pavel',     last_name: 'Horák',        email: 'pavel.horak@email.cz' },
+  { id: 'rp4', first_name: 'Jana',      last_name: 'Svobodová',    email: 'jana.svobodova@gmail.com' },
+  { id: 'rp5', first_name: 'Martin',    last_name: 'Kolář',        email: 'martin.kolar@centrum.cz' },
+  { id: 'rp6', first_name: 'Kateřina',  last_name: 'Nová',         email: 'katerina.nova@email.cz' },
+  { id: 'rp7', first_name: 'Tomáš',     last_name: 'Veselý',       email: 'tomas.vesely@volny.cz' },
+  { id: 'rp8', first_name: 'Eva',       last_name: 'Procházková',  email: 'eva.prochazkova@gmail.com' },
+];
+
 // ─── Club admin mock data ─────────────────────────────────────────────────────
 
 function mkCB(
   id: string, courtId: string, playerName: string,
   dayOffset: number, slots: number[],
-  pricePerHour: number, paymentStatus: PaymentStatus
+  pricePerHour: number, paymentStatus: PaymentStatus,
+  note?: string
 ): ClubBooking {
   const date    = todayStr(dayOffset);
   const slotMin = Math.min(...slots);
@@ -332,40 +357,42 @@ function mkCB(
     ends_at:   `${date}T${slotEndTime(slotMax)}:00.000Z`,
     slots, price: slotPrice(slots.length, pricePerHour),
     payment_status: paymentStatus, status: 'confirmed',
+    ...(note ? { note } : {}),
   };
 }
 
 export const MOCK_CLUB_BOOKINGS: ClubBooking[] = [
   // Dnes — Dvorec 1 (c1)
-  mkCB('cb1',  'c1', 'Jan Novák',           0, [4,5,6],          250, 'paid'),
-  mkCB('cb2',  'c1', 'Petra Marková',        0, [14,15,16,17],    250, 'pay_on_site'),
+  mkCB('cb1',  'c1', 'Jan Novák',           0, [18,19,20],           250, 'paid',        'Prosím dvorec u branky, přijíždím na kole.'),
+  mkCB('cb2',  'c1', 'Petra Marková',        0, [28,29,30,31],        250, 'pay_on_site'),
   // Dnes — Dvorec 2 (c2)
-  mkCB('cb3',  'c2', 'Pavel Horák',          0, [2,3],            250, 'paid'),
-  mkCB('cb4',  'c2', 'Jana Svobodová',       0, [12,13],          250, 'pending'),
-  mkCB('cb5',  'c2', 'Martin Kolář',         0, [24,25],          250, 'pay_on_site'),
+  mkCB('cb3',  'c2', 'Pavel Horák',          0, [16,17],              250, 'paid'),
+  mkCB('cb4',  'c2', 'Jana Svobodová',       0, [26,27],              250, 'pending',     'Potřebuji půjčit raketu – hraju levou rukou.'),
+  mkCB('cb5',  'c2', 'Martin Kolář',         0, [38,39],              250, 'pay_on_site'),
   // Dnes — Hala A – kurt 1 (c3)
-  mkCB('cb6',  'c3', 'Kateřina Nová',        0, [6,7,8,9],        180, 'paid'),
-  mkCB('cb7',  'c3', 'Tomáš Veselý',         0, [22,23,24,25,26], 180, 'pay_on_site'),
+  mkCB('cb6',  'c3', 'Kateřina Nová',        0, [20,21,22,23],        180, 'paid'),
+  mkCB('cb7',  'c3', 'Tomáš Veselý',         0, [36,37,38,39,40],     180, 'pay_on_site', 'Skupinová lekce, přijde 6 lidí. Prosím připravit 3 páry míčů.'),
   // Dnes — Hala A – kurt 2 (c4)
-  mkCB('cb8',  'c4', 'Eva Procházková',      0, [4,5,6],          180, 'pending'),
-  mkCB('cb9',  'c4', 'Radek Blažek',         0, [16,17,18,19],    180, 'paid'),
+  mkCB('cb8',  'c4', 'Eva Procházková',      0, [18,19,20],           180, 'pending'),
+  mkCB('cb9',  'c4', 'Radek Blažek',         0, [30,31,32,33],        180, 'paid'),
   // Dnes — Squash Kurt 1 (c5)
-  mkCB('cb10', 'c5', 'Lukáš Beneš',          0, [2,3,10,11],      200, 'paid'),
+  mkCB('cb10', 'c5', 'Lukáš Beneš',          0, [16,17,24,25],        200, 'paid'),
   // Dnes — Padel kurt 1 (c6)
-  mkCB('cb11', 'c6', 'Alžběta Dvořáčková',  0, [4,5,6,7,8,9],    300, 'paid'),
-  mkCB('cb12', 'c6', 'Roman Vítek',          0, [20,21,22,23],    300, 'pay_on_site'),
+  mkCB('cb11', 'c6', 'Alžběta Dvořáčková',  0, [18,19,20,21,22,23],  300, 'paid'),
+  mkCB('cb12', 'c6', 'Roman Vítek',          0, [34,35,36,37],        300, 'pay_on_site'),
   // Zítra — Dvorec 1
-  mkCB('cb13', 'c1', 'Jan Novák',            1, [2,3],            250, 'pending'),
-  mkCB('cb14', 'c1', 'Ondřej Vítek',         1, [10,11,12,13],    250, 'pay_on_site'),
+  mkCB('cb13', 'c1', 'Jan Novák',            1, [16,17],              250, 'pending'),
+  mkCB('cb14', 'c1', 'Ondřej Vítek',         1, [24,25,26,27],        250, 'pay_on_site', 'Turnaj juniorů – prosím připravit síťky a značky.'),
   // Zítra — Dvorec 2
-  mkCB('cb15', 'c2', 'Marie Horáčková',      1, [6,7,8,9,10,11],  250, 'paid'),
+  mkCB('cb15', 'c2', 'Marie Horáčková',      1, [20,21,22,23,24,25],  250, 'paid'),
   // Zítra — Hala c3
-  mkCB('cb16', 'c3', 'Roman Blažek',         1, [4,5,6],          180, 'pending'),
-  mkCB('cb17', 'c3', 'Tereza Nováková',      1, [14,15,16,17,18,19], 180, 'pay_on_site'),
+  mkCB('cb16', 'c3', 'Roman Blažek',         1, [18,19,20],           180, 'pending'),
+  mkCB('cb17', 'c3', 'Tereza Nováková',      1, [28,29,30,31,32,33],  180, 'pay_on_site'),
 ];
 
 export const MOCK_CLUB_SETTINGS: ClubSettings = {
-  editLockHours: 24,   // hráč nemůže editovat méně než 24h před rezervací
-  openingSlot:   0,    // 7:00
-  closingSlot:   29,   // 21:30
+  editLockHours:        24,   // hráč nemůže editovat méně než 24h před rezervací
+  openingSlot:          14,   // 7:00 (slot 14 při SLOT_START_HOUR=0)
+  closingSlot:          43,   // 21:30 (slot 43 při SLOT_START_HOUR=0); max 47 = 24:00
+  maxBookingDaysAhead:  14,   // hráč může rezervovat max 14 dní dopředu
 };
