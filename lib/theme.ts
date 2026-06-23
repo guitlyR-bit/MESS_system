@@ -56,6 +56,24 @@ export const colors = {
     gradient:     ['#FEFCE8', '#FEF3C7'] as const,
   },
 
+  // ── Volná teplá paleta — pro mixování akcentů napříč obrazovkami ──────────
+  warm: {
+    orange: '#F97316',  // živá oranžová
+    amber:  '#F59E0B',  // jantarová
+    yellow: '#EAB308',  // žlutá
+    red:    '#EF4444',  // červená
+    rose:   '#F43F5E',  // růžová/červená
+    pink:   '#EC4899',  // sytá růžová
+  },
+  warmFade: {
+    orange: '#FFF7ED',
+    amber:  '#FFFBEB',
+    yellow: '#FEFCE8',
+    red:    '#FEF2F2',
+    rose:   '#FFF1F2',
+    pink:   '#FDF2F8',
+  },
+
   // Stavové barvy
   success:  '#16A34A',
   warning:  '#D97706',

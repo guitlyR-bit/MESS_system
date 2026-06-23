@@ -4,31 +4,30 @@ import { colors } from '@/lib/theme';
 import { StatTile } from '@/components/ui/StatTile';
 import { ActionTile } from '@/components/ui/ActionTile';
 
-const A = colors.coach.accent;
-const AF = colors.coach.accentFade;
+const W = colors.warm;
 
 export default function CoachHomeScreen() {
   return (
     <SafeAreaView style={s.safe} edges={['bottom']}>
       <ScrollView contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false}>
 
-        <View style={s.row}>
-          <StatTile label="Svěřenci" value="0"  sub="aktivních" accent={A} accentFade={AF} />
-          <View style={s.divider} />
-          <StatTile label="Tréninky" value="0"  sub="tento týden" accent={A} accentFade={AF} />
-        </View>
-        <View style={[s.row, s.rowBorderTop]}>
-          <StatTile label="Hodiny" value="0"    sub="odpracováno" accent={A} accentFade={AF} />
-          <View style={s.divider} />
-          <StatTile label="Hodnocení" value="—" sub="průměr" accent={A} accentFade={AF} />
+        <View style={s.statGrid}>
+          <View style={s.row}>
+            <StatTile label="Svěřenci"  value="0" sub="aktivních"    accent={W.rose}  />
+            <StatTile label="Tréninky"  value="0" sub="tento týden"  accent={W.pink}  />
+          </View>
+          <View style={s.row}>
+            <StatTile label="Hodiny"    value="0" sub="odpracováno"  accent={W.red}   />
+            <StatTile label="Hodnocení" value="—" sub="průměr"       accent={W.amber} />
+          </View>
         </View>
 
-        <View style={s.sectionGap} />
-
-        <ActionTile label="Naplánovat trénink"  description="Přidat tréninkovou jednotku" accent={A} badge="BRZY" />
-        <ActionTile label="Moji svěřenci"       description="Přehled a pokrok" accent={A} />
-        <ActionTile label="Tréninkový plán"     description="Týdenní a měsíční rozvrh" accent={A} />
-        <ActionTile label="Zprávy"              description="Komunikace se svěřenci" accent={A} badge="BRZY" />
+        <View style={s.actions}>
+          <ActionTile label="Naplánovat trénink" description="Přidat tréninkovou jednotku" accent={W.rose}  badge="BRZY" />
+          <ActionTile label="Moji svěřenci"      description="Přehled a pokrok"            accent={W.pink}  />
+          <ActionTile label="Tréninkový plán"    description="Týdenní a měsíční rozvrh"    accent={W.red}   />
+          <ActionTile label="Zprávy"             description="Komunikace se svěřenci"      accent={W.amber} badge="BRZY" />
+        </View>
 
       </ScrollView>
     </SafeAreaView>
@@ -36,10 +35,9 @@ export default function CoachHomeScreen() {
 }
 
 const s = StyleSheet.create({
-  safe:         { flex: 1, backgroundColor: colors.bg },
-  scroll:       { flexGrow: 1 },
-  row:          { flexDirection: 'row' },
-  rowBorderTop: { borderTopWidth: 3, borderTopColor: '#111111' },
-  divider:      { width: 3, backgroundColor: '#111111' },
-  sectionGap:   { height: 3, backgroundColor: '#111111' },
+  safe:     { flex: 1, backgroundColor: colors.bgAlt },
+  scroll:   { flexGrow: 1 },
+  statGrid: { backgroundColor: colors.bgAlt, padding: 4, gap: 4 },
+  row:      { flexDirection: 'row', gap: 4 },
+  actions:  { marginTop: 16 },
 });

@@ -4,31 +4,30 @@ import { colors } from '@/lib/theme';
 import { StatTile } from '@/components/ui/StatTile';
 import { ActionTile } from '@/components/ui/ActionTile';
 
-const A = colors.club.accent;
-const AF = colors.club.accentFade;
+const W = colors.warm;
 
 export default function ClubHomeScreen() {
   return (
     <SafeAreaView style={s.safe} edges={['bottom']}>
       <ScrollView contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false}>
 
-        <View style={s.row}>
-          <StatTile label="Sportoviště" value="0" sub="celkem" accent={A} accentFade={AF} />
-          <View style={s.divider} />
-          <StatTile label="Rezervace"   value="0" sub="dnes" accent={A} accentFade={AF} />
-        </View>
-        <View style={[s.row, s.rowBorderTop]}>
-          <StatTile label="Členové"  value="0" sub="aktivních" accent={A} accentFade={AF} />
-          <View style={s.divider} />
-          <StatTile label="Příjmy"   value="—" sub="tento měsíc" accent={A} accentFade={AF} />
+        <View style={s.statGrid}>
+          <View style={s.row}>
+            <StatTile label="Sportoviště" value="0" sub="celkem"       accent={W.yellow} />
+            <StatTile label="Rezervace"   value="0" sub="dnes"         accent={W.amber}  />
+          </View>
+          <View style={s.row}>
+            <StatTile label="Členové"     value="0" sub="aktivních"    accent={W.orange} />
+            <StatTile label="Příjmy"      value="—" sub="tento měsíc"  accent={W.rose}   />
+          </View>
         </View>
 
-        <View style={s.sectionGap} />
-
-        <ActionTile label="Správa rezervací"   description="Přehled a schvalování" accent={A} />
-        <ActionTile label="Sportoviště"        description="Kurty, hřiště, haly" accent={A} />
-        <ActionTile label="Členové klubu"      description="Registrace a správa" accent={A} />
-        <ActionTile label="Přehled příjmů"     description="Platby a faktury" accent={A} badge="BRZY" />
+        <View style={s.actions}>
+          <ActionTile label="Správa rezervací"  description="Přehled a schvalování"  accent={W.yellow} />
+          <ActionTile label="Sportoviště"       description="Kurty, hřiště, haly"    accent={W.amber}  />
+          <ActionTile label="Členové klubu"     description="Registrace a správa"    accent={W.orange} />
+          <ActionTile label="Přehled příjmů"   description="Platby a faktury"       accent={W.rose}   badge="BRZY" />
+        </View>
 
       </ScrollView>
     </SafeAreaView>
@@ -36,10 +35,9 @@ export default function ClubHomeScreen() {
 }
 
 const s = StyleSheet.create({
-  safe:         { flex: 1, backgroundColor: colors.bg },
-  scroll:       { flexGrow: 1 },
-  row:          { flexDirection: 'row' },
-  rowBorderTop: { borderTopWidth: 3, borderTopColor: '#111111' },
-  divider:      { width: 3, backgroundColor: '#111111' },
-  sectionGap:   { height: 3, backgroundColor: '#111111' },
+  safe:     { flex: 1, backgroundColor: colors.bgAlt },
+  scroll:   { flexGrow: 1 },
+  statGrid: { backgroundColor: colors.bgAlt, padding: 4, gap: 4 },
+  row:      { flexDirection: 'row', gap: 4 },
+  actions:  { marginTop: 16 },
 });

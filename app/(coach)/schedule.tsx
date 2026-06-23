@@ -4,28 +4,26 @@ import { colors } from '@/lib/theme';
 import { StatTile } from '@/components/ui/StatTile';
 import { ActionTile } from '@/components/ui/ActionTile';
 
-const A = colors.coach.accent;
-const AF = colors.coach.accentFade;
+const W = colors.warm;
 
 export default function CoachScheduleScreen() {
   return (
     <SafeAreaView style={s.safe} edges={['bottom']}>
       <ScrollView contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false}>
 
-        <View style={s.row}>
-          <StatTile label="Dnes" value="0"    sub="tréninků" accent={A} accentFade={AF} />
-          <View style={s.divider} />
-          <StatTile label="Tento týden" value="0" sub="tréninků" accent={A} accentFade={AF} />
+        <View style={s.statGrid}>
+          <View style={s.row}>
+            <StatTile label="Dnes"        value="0" sub="tréninků"  accent={W.rose} />
+            <StatTile label="Tento týden" value="0" sub="tréninků"  accent={W.red}  />
+          </View>
         </View>
 
-        <View style={s.sectionGap} />
-
-        <ActionTile label="Přidat trénink"   description="Nová tréninková jednotka" accent={A} badge="BRZY" />
-        <ActionTile label="Dnešní program"   description="Rozvrh na dnešek" accent={A} />
-        <ActionTile label="Týdenní přehled"  description="Po–Ne, všichni svěřenci" accent={A} />
-        <ActionTile label="Šablony tréninků" description="Uložené tréninkové plány" accent={A} badge="BRZY" />
-
-        <View style={s.sectionGap} />
+        <View style={s.actions}>
+          <ActionTile label="Přidat trénink"    description="Nová tréninková jednotka"    accent={W.rose}  badge="BRZY" />
+          <ActionTile label="Dnešní program"    description="Rozvrh na dnešek"            accent={W.pink}  />
+          <ActionTile label="Týdenní přehled"   description="Po–Ne, všichni svěřenci"     accent={W.red}   />
+          <ActionTile label="Šablony tréninků"  description="Uložené tréninkové plány"    accent={W.amber} badge="BRZY" />
+        </View>
 
         <View style={s.placeholder}>
           <Text style={s.placeholderTitle}>Žádné tréninky dnes</Text>
@@ -38,12 +36,12 @@ export default function CoachScheduleScreen() {
 }
 
 const s = StyleSheet.create({
-  safe:         { flex: 1, backgroundColor: colors.bg },
+  safe:         { flex: 1, backgroundColor: colors.bgAlt },
   scroll:       { flexGrow: 1 },
-  row:          { flexDirection: 'row' },
-  divider:      { width: 3, backgroundColor: '#111111' },
-  sectionGap:   { height: 3, backgroundColor: '#111111' },
-  placeholder:  { backgroundColor: colors.surface, padding: 24, borderWidth: 1, borderColor: colors.border, margin: 16, gap: 6 },
-  placeholderTitle: { fontSize: 16, fontWeight: '800', color: colors.textPrimary },
+  statGrid:     { backgroundColor: colors.bgAlt, padding: 4, gap: 4 },
+  row:          { flexDirection: 'row', gap: 4 },
+  actions:      { marginTop: 16 },
+  placeholder:  { backgroundColor: colors.surface, padding: 24, margin: 16, gap: 6, borderLeftWidth: 4, borderLeftColor: colors.border },
+  placeholderTitle: { fontSize: 15, fontWeight: '800', color: colors.textPrimary },
   placeholderSub:   { fontSize: 13, color: colors.textMuted },
 });
