@@ -3,7 +3,11 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors } from '@/lib/theme';
 import { StatTile } from '@/components/ui/StatTile';
 import { useBookings } from '@/hooks/useBookings';
-import { fmtHour, fmtDay, SPORT_LABELS } from '@/lib/mockData';
+import { slotToTime, fmtDay, SPORT_LABELS, SLOT_START_HOUR } from '@/lib/mockData';
+
+function fmtHour(h: number): string {
+  return `${String(h).padStart(2, '0')}:00`;
+}
 import type { BookingWithCourt } from '@/types/database';
 
 const W = colors.warm;

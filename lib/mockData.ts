@@ -100,27 +100,62 @@ export const MOCK_COURTS: CourtWithClub[] = [
   },
 ];
 
-// ─── Obsazené sloty (courtId → datum → hodiny) ────────────────────────────────
+// ─── Sloty — 30minutové bloky ─────────────────────────────────────────────────
+//
+//  Index 0 = 7:00, 1 = 7:30, 2 = 8:00 … 29 = 21:30
+//  Celkem 30 slotů za den (7:00 – 22:00)
+
+export const SLOT_COUNT      = 30;
+export const SLOT_START_HOUR = 7;
+export const ALL_SLOTS: number[] = Array.from({ length: SLOT_COUNT }, (_, i) => i);
+
+/** Slot index → zobrazitelný čas ('07:00', '07:30', …) */
+export function slotToTime(index: number): string {
+  const totalMin = SLOT_START_HOUR * 60 + index * 30;
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
+
+/** Konec výběru — čas za posledním slotem (= start dalšího bloku) */
+export function slotEndTime(lastIndex: number): string {
+  return slotToTime(lastIndex + 1);
+}
+
+/** Počet slotů → trvání jako string ('30 min', '1 hod', '1,5 hod', …) */
+export function slotDuration(count: number): string {
+  const minutes = count * 30;
+  if (minutes < 60) return `${minutes} min`;
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  return m === 0 ? `${h} hod` : `${h},5 hod`;
+}
+
+/** Cena za vybraný počet slotů */
+export function slotPrice(count: number, pricePerHour: number): number {
+  return Math.round((count * 0.5) * pricePerHour);
+}
+
+// ─── Obsazené sloty (courtId → datum → pole indexů slotů) ────────────────────
 
 type BookedSlots = Record<string, Record<string, number[]>>;
 
-// Klíč: `${courtId}_${dateString}`, hodnota: pole obsazených hodin (7–21)
 export const MOCK_BOOKED_SLOTS: BookedSlots = {
   c1: {
-    [todayStr(0)]: [9, 10, 14, 15],
-    [todayStr(1)]: [8, 9, 12, 18],
-    [todayStr(2)]: [10, 11, 16],
+    [todayStr(0)]: [4, 5, 6, 14, 15, 16, 17],    // 9:00–10:30, 14:00–15:30
+    [todayStr(1)]: [2, 3, 10, 11, 22, 23],
+    [todayStr(2)]: [6, 7, 8, 18, 19],
   },
   c2: {
-    [todayStr(0)]: [8, 13, 14, 19],
-    [todayStr(1)]: [9, 17],
+    [todayStr(0)]: [2, 3, 12, 13, 24, 25],
+    [todayStr(1)]: [4, 5, 20, 21],
   },
   c3: {
-    [todayStr(0)]: [7, 8, 9, 18, 19, 20],
-    [todayStr(1)]: [10, 11],
+    [todayStr(0)]: [0, 1, 2, 3, 4, 5, 22, 23, 24, 25, 26], // ráno a večer obsazeno
+    [todayStr(1)]: [6, 7, 8],
   },
   c5: {
-    [todayStr(0)]: [8, 9, 12, 13, 20],
+    [todayStr(0)]: [2, 3, 10, 11, 26, 27],
   },
 };
 
@@ -183,10 +218,7 @@ export function getNext14Days(): Date[] {
   });
 }
 
-/** Všechny dostupné hodiny v den (7–21) */
-export const ALL_HOURS: number[] = Array.from({ length: 15 }, (_, i) => i + 7);
-
-/** Formátuje hodinu jako '09:00' */
+/** @deprecated Použij slotToTime() */
 export function fmtHour(h: number): string {
   return `${String(h).padStart(2, '0')}:00`;
 }

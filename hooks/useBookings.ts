@@ -11,17 +11,31 @@ export function useBookings() {
   const [bookings, setBookings] = useState<BookingWithCourt[]>(MOCK_MY_BOOKINGS);
   const [bookedSlots, setBookedSlots] = useState(MOCK_BOOKED_SLOTS);
 
-  /** Vytvoří novou rezervaci — vrátí vytvořenou rezervaci nebo null při chybě */
+  /** Vytvoří novou rezervaci ze seznamu slotů */
   const createBooking = useCallback((params: {
     courtId: string;
     courtName: string;
     courtSport: string;
     clubName: string;
     clubCity: string;
-    date: string;      // 'YYYY-MM-DD'
-    hour: number;      // 7–21
-    price: number;
+    date: string;         // 'YYYY-MM-DD'
+    slots: number[];      // indexy vybraných slotů (0–29)
+    price: number;        // celková cena
   }): BookingWithCourt => {
+    const SLOT_START = 7; // 7:00
+    const firstSlot = Math.min(...params.slots);
+    const lastSlot  = Math.max(...params.slots);
+
+    const toTime = (idx: number) => {
+      const totalMin = SLOT_START * 60 + idx * 30;
+      const h = Math.floor(totalMin / 60);
+      const m = totalMin % 60;
+      return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+    };
+
+    const startTime = toTime(firstSlot);
+    const endTime   = toTime(lastSlot + 1); // konec posledního bloku
+
     const id = `b_${Date.now()}`;
     const newBooking: BookingWithCourt = {
       id,
@@ -31,8 +45,8 @@ export function useBookings() {
       club_name:   params.clubName,
       club_city:   params.clubCity,
       player_id:   'player1',
-      starts_at:   `${params.date}T${String(params.hour).padStart(2, '0')}:00:00.000Z`,
-      ends_at:     `${params.date}T${String(params.hour + 1).padStart(2, '0')}:00:00.000Z`,
+      starts_at:   `${params.date}T${startTime}:00.000Z`,
+      ends_at:     `${params.date}T${endTime}:00.000Z`,
       status:      'confirmed',
       price:       params.price,
       created_at:  new Date().toISOString(),
@@ -40,14 +54,14 @@ export function useBookings() {
 
     setBookings(prev => [newBooking, ...prev]);
 
-    // Označí slot jako obsazený
+    // Označí všechny vybrané sloty jako obsazené
     setBookedSlots(prev => ({
       ...prev,
       [params.courtId]: {
         ...prev[params.courtId],
         [params.date]: [
           ...(prev[params.courtId]?.[params.date] ?? []),
-          params.hour,
+          ...params.slots,
         ],
       },
     }));
@@ -62,8 +76,8 @@ export function useBookings() {
     );
   }, []);
 
-  /** Vrátí obsazené hodiny pro daný kurt a datum */
-  const getBookedHours = useCallback((courtId: string, date: string): number[] => {
+  /** Vrátí obsazené sloty (indexy 0–29) pro daný kurt a datum */
+  const getBookedSlots = useCallback((courtId: string, date: string): number[] => {
     return bookedSlots[courtId]?.[date] ?? [];
   }, [bookedSlots]);
 
@@ -81,6 +95,6 @@ export function useBookings() {
     activeBookings,
     createBooking,
     cancelBooking,
-    getBookedHours,
+    getBookedSlots,
   };
 }

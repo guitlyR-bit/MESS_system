@@ -1,7 +1,7 @@
-import { useState, useMemo } from 'react';
+import { useState } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity,
-  TextInput, StyleSheet, useWindowDimensions,
+  TextInput, StyleSheet,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors } from '@/lib/theme';
@@ -9,8 +9,11 @@ import { useBookings } from '@/hooks/useBookings';
 import {
   MOCK_COURTS,
   getNext14Days,
-  ALL_HOURS,
-  fmtHour,
+  ALL_SLOTS,
+  slotToTime,
+  slotEndTime,
+  slotDuration,
+  slotPrice,
   fmtDay,
   todayStr,
   SPORT_LABELS,
@@ -18,77 +21,78 @@ import {
 } from '@/lib/mockData';
 import type { CourtWithClub } from '@/types/database';
 
-type View = 'list' | 'detail' | 'confirm';
+type ScreenView = 'list' | 'detail' | 'confirm';
 const W = colors.warm;
 
 // ─── Hlavní obrazovka ─────────────────────────────────────────────────────────
 
 export default function PlayerCourtsScreen() {
-  const [view, setView] = useState<View>('list');
+  const [view, setView]               = useState<ScreenView>('list');
   const [selectedCourt, setSelectedCourt] = useState<CourtWithClub | null>(null);
-  const [selectedDate, setSelectedDate] = useState<Date>(new Date());
-  const [selectedHour, setSelectedHour] = useState<number | null>(null);
-  const [sportFilter, setSportFilter] = useState<string>('all');
-  const [search, setSearch] = useState('');
-  const [confirmedBookingId, setConfirmedBookingId] = useState<string | null>(null);
+  const [selectedDate, setSelectedDate]   = useState<Date>(new Date());
+  const [selectedSlots, setSelectedSlots] = useState<number[]>([]);
+  const [sportFilter, setSportFilter]     = useState<string>('all');
+  const [search, setSearch]               = useState('');
 
-  const { createBooking, getBookedHours, cancelBooking, bookings } = useBookings();
+  const { createBooking, getBookedSlots } = useBookings();
 
   function openDetail(court: CourtWithClub) {
     setSelectedCourt(court);
     setSelectedDate(new Date());
-    setSelectedHour(null);
+    setSelectedSlots([]);
     setView('detail');
   }
 
+  function dayOffset(date: Date = selectedDate) {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const sel = new Date(date);
+    sel.setHours(0, 0, 0, 0);
+    return Math.round((sel.getTime() - today.getTime()) / 86400000);
+  }
+
   function handleBook() {
-    if (!selectedCourt || selectedHour === null) return;
-    const b = createBooking({
+    if (!selectedCourt || selectedSlots.length === 0) return;
+    const dateKey = selectedDate.toISOString().slice(0, 10);
+    const price   = slotPrice(selectedSlots.length, selectedCourt.price_per_hour);
+    createBooking({
       courtId:    selectedCourt.id,
       courtName:  selectedCourt.name,
       courtSport: selectedCourt.sport,
       clubName:   selectedCourt.club_name,
       clubCity:   selectedCourt.club_city,
-      date:       todayStr(dayOffset()),
-      hour:       selectedHour,
-      price:      selectedCourt.price_per_hour,
+      date:       dateKey,
+      slots:      selectedSlots,
+      price,
     });
-    setConfirmedBookingId(b.id);
     setView('confirm');
   }
 
-  function dayOffset() {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const sel = new Date(selectedDate);
-    sel.setHours(0, 0, 0, 0);
-    return Math.round((sel.getTime() - today.getTime()) / 86400000);
-  }
-
-  if (view === 'confirm' && selectedCourt && selectedHour !== null) {
+  if (view === 'confirm' && selectedCourt && selectedSlots.length > 0) {
     return (
       <ConfirmView
         court={selectedCourt}
         date={selectedDate}
-        hour={selectedHour}
-        onClose={() => { setView('list'); setSelectedCourt(null); }}
-        onNewBooking={() => { setSelectedHour(null); setView('detail'); }}
+        slots={selectedSlots}
+        onClose={() => { setView('list'); setSelectedCourt(null); setSelectedSlots([]); }}
+        onNewBooking={() => { setSelectedSlots([]); setView('detail'); }}
       />
     );
   }
 
   if (view === 'detail' && selectedCourt) {
+    const dateKey    = selectedDate.toISOString().slice(0, 10);
+    const bookedNow  = getBookedSlots(selectedCourt.id, dateKey);
     return (
       <DetailView
         court={selectedCourt}
         selectedDate={selectedDate}
-        selectedHour={selectedHour}
+        selectedSlots={selectedSlots}
+        bookedSlots={bookedNow}
         onBack={() => setView('list')}
-        onSelectDate={setSelectedDate}
-        onSelectHour={setSelectedHour}
+        onSelectDate={(d) => { setSelectedDate(d); setSelectedSlots([]); }}
+        onSlotsChange={setSelectedSlots}
         onBook={handleBook}
-        getBookedHours={getBookedHours}
-        dateOffset={dayOffset()}
       />
     );
   }
@@ -208,26 +212,67 @@ function CourtCard({ court, onPress }: { court: CourtWithClub; onPress: () => vo
   );
 }
 
-// ─── 2. Detail kurtu + výběr datumu a slotu ───────────────────────────────────
+// ─── 2. Detail kurtu + výběr datumu a slotů ──────────────────────────────────
 
 function DetailView({
-  court, selectedDate, selectedHour, onBack,
-  onSelectDate, onSelectHour, onBook, getBookedHours, dateOffset,
+  court, selectedDate, selectedSlots, bookedSlots,
+  onBack, onSelectDate, onSlotsChange, onBook,
 }: {
   court: CourtWithClub;
   selectedDate: Date;
-  selectedHour: number | null;
+  selectedSlots: number[];
+  bookedSlots: number[];
   onBack: () => void;
   onSelectDate: (d: Date) => void;
-  onSelectHour: (h: number) => void;
+  onSlotsChange: (slots: number[]) => void;
   onBook: () => void;
-  getBookedHours: (id: string, date: string) => number[];
-  dateOffset: number;
 }) {
-  const days = getNext14Days();
-  const dateKey = selectedDate.toISOString().slice(0, 10);
-  const booked = getBookedHours(court.id, dateKey);
+  const days       = getNext14Days();
+  const dateKey    = selectedDate.toISOString().slice(0, 10);
   const sportColor = SPORT_COLORS[court.sport] ?? W.orange;
+
+  const selMin = selectedSlots.length > 0 ? Math.min(...selectedSlots) : -1;
+  const selMax = selectedSlots.length > 0 ? Math.max(...selectedSlots) : -1;
+
+  function handleSlotPress(idx: number) {
+    if (bookedSlots.includes(idx)) return;
+
+    if (selectedSlots.length === 0) {
+      onSlotsChange([idx]);
+      return;
+    }
+
+    // Klik na vybraný slot na kraji → zkrátit výběr
+    if (idx === selMin && selectedSlots.length > 1) {
+      onSlotsChange(selectedSlots.filter(s => s !== selMin));
+      return;
+    }
+    if (idx === selMax) {
+      onSlotsChange(selectedSlots.filter(s => s !== selMax));
+      return;
+    }
+
+    // Prodloužení vpřed (přilehlý ke konci)
+    if (idx === selMax + 1 && !bookedSlots.includes(idx)) {
+      onSlotsChange([...selectedSlots, idx]);
+      return;
+    }
+
+    // Prodloužení vzad (přilehlý k začátku)
+    if (idx === selMin - 1 && !bookedSlots.includes(idx)) {
+      onSlotsChange([idx, ...selectedSlots]);
+      return;
+    }
+
+    // Klik daleko od výběru → nový výběr
+    onSlotsChange([idx]);
+  }
+
+  const totalPrice    = slotPrice(selectedSlots.length, court.price_per_hour);
+  const duration      = slotDuration(selectedSlots.length);
+  const bookingLabel  = selectedSlots.length > 0
+    ? `${slotToTime(selMin)} – ${slotEndTime(selMax)}`
+    : '';
 
   return (
     <SafeAreaView style={s.safe} edges={['bottom']}>
@@ -250,19 +295,16 @@ function DetailView({
           {days.map((day, i) => {
             const fmt = fmtDay(day);
             const isSelected = day.toISOString().slice(0, 10) === dateKey;
-            const isToday = i === 0;
             return (
               <TouchableOpacity
                 key={i}
-                onPress={() => { onSelectDate(day); onSelectHour(null as any); }}
+                onPress={() => onSelectDate(day)}
                 style={[s.dayChip, isSelected && { backgroundColor: sportColor }]}
               >
                 <Text style={[s.dayChipWeekday, isSelected && { color: '#fff' }]}>
-                  {isToday ? 'DNES' : fmt.short}
+                  {i === 0 ? 'DNES' : fmt.short}
                 </Text>
-                <Text style={[s.dayChipNum, isSelected && { color: '#fff' }]}>
-                  {fmt.num}
-                </Text>
+                <Text style={[s.dayChipNum, isSelected && { color: '#fff' }]}>{fmt.num}</Text>
                 <Text style={[s.dayChipMonth, isSelected && { color: 'rgba(255,255,255,0.7)' }]}>
                   {fmt.month}
                 </Text>
@@ -271,50 +313,86 @@ function DetailView({
           })}
         </ScrollView>
 
-        {/* Časové sloty */}
-        <Text style={s.sectionTitle}>DOSTUPNÉ TERMÍNY</Text>
+        {/* Instrukce */}
+        <View style={s.slotHintRow}>
+          <Text style={s.sectionTitle}>DOSTUPNÉ TERMÍNY</Text>
+          <Text style={s.slotHint}>Klikněte pro výběr, rozšiřte přilehlými bloky</Text>
+        </View>
+
+        {/* Mřížka 30min slotů */}
         <View style={s.slotGrid}>
-          {ALL_HOURS.map(hour => {
-            const isBooked   = booked.includes(hour);
-            const isSelected = selectedHour === hour;
+          {ALL_SLOTS.map(idx => {
+            const isBooked   = bookedSlots.includes(idx);
+            const isSelected = selectedSlots.includes(idx);
+            const isFirst    = idx === selMin;
+            const isLast     = idx === selMax;
+
             return (
               <TouchableOpacity
-                key={hour}
+                key={idx}
                 disabled={isBooked}
-                onPress={() => onSelectHour(isSelected ? null as any : hour)}
+                onPress={() => handleSlotPress(idx)}
                 style={[
                   s.slot,
                   isBooked   && s.slotBooked,
                   isSelected && { backgroundColor: sportColor, borderColor: sportColor },
+                  isSelected && isFirst && s.slotFirst,
+                  isSelected && isLast  && s.slotLast,
                 ]}
               >
                 <Text style={[
-                  s.slotText,
+                  s.slotTime,
                   isBooked   && s.slotTextBooked,
                   isSelected && s.slotTextSelected,
                 ]}>
-                  {fmtHour(hour)}
+                  {slotToTime(idx)}
                 </Text>
-                {isBooked && <Text style={s.slotSubBooked}>obsazeno</Text>}
-                {!isBooked && !isSelected && <Text style={s.slotSub}>{court.price_per_hour} Kč</Text>}
-                {isSelected && <Text style={[s.slotSub, { color: '#fff' }]}>vybráno</Text>}
+
+                {isBooked   && <Text style={s.slotSubBooked}>obsazeno</Text>}
+                {!isBooked && !isSelected && (
+                  <Text style={s.slotSub}>30 min</Text>
+                )}
+                {isSelected && isFirst && selectedSlots.length > 1 && (
+                  <Text style={[s.slotSub, { color: 'rgba(255,255,255,0.8)' }]}>start</Text>
+                )}
+                {isSelected && isLast && (
+                  <Text style={[s.slotSub, { color: 'rgba(255,255,255,0.8)' }]}>
+                    {isFirst ? '30 min' : 'konec'}
+                  </Text>
+                )}
               </TouchableOpacity>
             );
           })}
         </View>
 
-        {/* Tlačítko rezervace */}
-        {selectedHour !== null && (
+        {/* Souhrn výběru + tlačítko rezervace */}
+        {selectedSlots.length > 0 && (
           <View style={s.bookBtnWrap}>
+            {/* Řádek se shrnutím */}
+            <View style={[s.bookSummary, { borderColor: sportColor }]}>
+              <View style={s.bookSummaryItem}>
+                <Text style={s.bookSummaryLabel}>ČAS</Text>
+                <Text style={s.bookSummaryValue}>{bookingLabel}</Text>
+              </View>
+              <View style={[s.bookSummaryDivider]} />
+              <View style={s.bookSummaryItem}>
+                <Text style={s.bookSummaryLabel}>TRVÁNÍ</Text>
+                <Text style={s.bookSummaryValue}>{duration}</Text>
+              </View>
+              <View style={s.bookSummaryDivider} />
+              <View style={s.bookSummaryItem}>
+                <Text style={s.bookSummaryLabel}>CENA</Text>
+                <Text style={[s.bookSummaryValue, { color: sportColor }]}>{totalPrice} Kč</Text>
+              </View>
+            </View>
+
             <TouchableOpacity
               onPress={onBook}
               activeOpacity={0.88}
               style={[s.bookBtn, { backgroundColor: sportColor }]}
             >
-              <Text style={s.bookBtnText}>
-                REZERVOVAT {fmtHour(selectedHour)}–{fmtHour(selectedHour + 1)}
-              </Text>
-              <Text style={s.bookBtnPrice}>{court.price_per_hour} Kč</Text>
+              <Text style={s.bookBtnText}>REZERVOVAT</Text>
+              <Text style={s.bookBtnDetail}>{bookingLabel} · {totalPrice} Kč</Text>
             </TouchableOpacity>
           </View>
         )}
@@ -327,22 +405,25 @@ function DetailView({
 
 // ─── 3. Potvrzení rezervace ───────────────────────────────────────────────────
 
-function ConfirmView({ court, date, hour, onClose, onNewBooking }: {
+function ConfirmView({ court, date, slots, onClose, onNewBooking }: {
   court: CourtWithClub;
   date: Date;
-  hour: number;
+  slots: number[];
   onClose: () => void;
   onNewBooking: () => void;
 }) {
-  const sportColor = SPORT_COLORS[court.sport] ?? W.orange;
-  const fmt = fmtDay(date);
+  const sportColor  = SPORT_COLORS[court.sport] ?? W.orange;
+  const fmt         = fmtDay(date);
+  const selMin      = Math.min(...slots);
+  const selMax      = Math.max(...slots);
+  const totalPrice  = slotPrice(slots.length, court.price_per_hour);
+  const duration    = slotDuration(slots.length);
+  const timeRange   = `${slotToTime(selMin)} – ${slotEndTime(selMax)}`;
 
   return (
     <SafeAreaView style={[s.safe, { justifyContent: 'center' }]} edges={['bottom']}>
       <View style={s.confirmBox}>
-        {/* Barevný pruh */}
         <View style={[s.confirmBar, { backgroundColor: sportColor }]} />
-
         <View style={s.confirmContent}>
           <Text style={s.confirmCheck}>✓</Text>
           <Text style={s.confirmTitle}>Rezervace potvrzena</Text>
@@ -351,8 +432,9 @@ function ConfirmView({ court, date, hour, onClose, onNewBooking }: {
             <ConfirmRow label="Sportoviště" value={court.name} />
             <ConfirmRow label="Klub"        value={`${court.club_name}, ${court.club_city}`} />
             <ConfirmRow label="Datum"       value={`${fmt.short} ${fmt.num}.${fmt.month}`} />
-            <ConfirmRow label="Čas"         value={`${fmtHour(hour)} – ${fmtHour(hour + 1)}`} />
-            <ConfirmRow label="Cena"        value={`${court.price_per_hour} Kč`} accent={sportColor} />
+            <ConfirmRow label="Čas"         value={timeRange} />
+            <ConfirmRow label="Trvání"      value={duration} />
+            <ConfirmRow label="Cena"        value={`${totalPrice} Kč`} accent={sportColor} />
           </View>
 
           <TouchableOpacity onPress={onNewBooking} activeOpacity={0.85}
@@ -453,21 +535,32 @@ const s = StyleSheet.create({
   dayChipNum: { fontSize: 20, fontWeight: '900', color: colors.textPrimary, lineHeight: 26 },
   dayChipMonth: { fontSize: 10, color: colors.textMuted },
 
-  // Časové sloty
-  slotGrid: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: 14, gap: 8 },
-  slot: { width: '30%', flexGrow: 1, alignItems: 'center', paddingVertical: 12, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, gap: 2 },
+  // Hint a sekce
+  slotHintRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingRight: 16 },
+  slotHint: { fontSize: 10, color: colors.textDisabled, fontStyle: 'italic' },
+
+  // Časové sloty — 30min, 4 sloupce
+  slotGrid: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: 14, gap: 4 },
+  slot: { width: '23%', flexGrow: 1, alignItems: 'center', paddingVertical: 10, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, gap: 1 },
+  slotFirst: { borderTopLeftRadius: 4, borderBottomLeftRadius: 4 },
+  slotLast:  { borderTopRightRadius: 4, borderBottomRightRadius: 4 },
   slotBooked: { backgroundColor: colors.bgAlt, borderColor: colors.border },
-  slotText: { fontSize: 15, fontWeight: '800', color: colors.textPrimary },
+  slotTime: { fontSize: 13, fontWeight: '800', color: colors.textPrimary },
   slotTextBooked: { color: colors.textDisabled },
   slotTextSelected: { color: '#fff' },
-  slotSub: { fontSize: 10, color: colors.textMuted },
-  slotSubBooked: { fontSize: 10, color: colors.textDisabled },
+  slotSub: { fontSize: 9, color: colors.textMuted },
+  slotSubBooked: { fontSize: 9, color: colors.textDisabled },
 
-  // Tlačítko rezervace
-  bookBtnWrap: { padding: 16, paddingTop: 24 },
-  bookBtn: { height: 60, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 24 },
-  bookBtnText: { fontSize: 14, fontWeight: '900', color: '#fff', letterSpacing: 1 },
-  bookBtnPrice: { fontSize: 18, fontWeight: '900', color: 'rgba(255,255,255,0.9)' },
+  // Souhrn výběru + tlačítko rezervace
+  bookBtnWrap: { padding: 16, paddingTop: 20, gap: 10 },
+  bookSummary: { flexDirection: 'row', borderWidth: 2, backgroundColor: colors.surface },
+  bookSummaryItem: { flex: 1, alignItems: 'center', paddingVertical: 12 },
+  bookSummaryLabel: { fontSize: 9, fontWeight: '800', color: colors.textMuted, letterSpacing: 1 },
+  bookSummaryValue: { fontSize: 14, fontWeight: '900', color: colors.textPrimary, marginTop: 2 },
+  bookSummaryDivider: { width: 1, backgroundColor: colors.border },
+  bookBtn: { height: 60, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20 },
+  bookBtnText: { fontSize: 13, fontWeight: '900', color: '#fff', letterSpacing: 1.5 },
+  bookBtnDetail: { fontSize: 13, fontWeight: '700', color: 'rgba(255,255,255,0.85)' },
 
   // Potvrzení
   confirmBox: { margin: 16, backgroundColor: colors.surface, overflow: 'hidden', borderWidth: 1, borderColor: colors.border },
