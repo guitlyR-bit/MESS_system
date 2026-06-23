@@ -5,6 +5,13 @@ Postavena na Expo (React Native + Web), TypeScript, Expo Router, NativeWind a Su
 
 ---
 
+## Požadavky
+
+**Doporučená verze Node.js: 20 LTS nebo 22 LTS.**  
+S Node.js 24 může `expo start` selhat s chybou `TypeError: _ws(...).WebSocketServer is not a constructor` kvůli nekompatibilitě bundlovaného modulu `ws` v Expo CLI.
+
+---
+
 ## Rychlý start
 
 ### 1. Instalace závislostí
@@ -105,12 +112,12 @@ supabase/
 
 | Technologie              | Verze       | Účel                              |
 |--------------------------|-------------|-----------------------------------|
-| Expo SDK                 | ~53.0.0     | Cross-platform framework          |
-| Expo Router              | ~4.0.17     | File-based routing                |
+| Expo SDK                 | ^56.0.0     | Cross-platform framework          |
+| Expo Router              | ^56.0.0     | File-based routing                |
 | NativeWind               | ^4.1.23     | Tailwind CSS pro React Native     |
 | Tailwind CSS             | ^3.4.17     | Utility-first stylování           |
 | Supabase JS              | ^2.49.4     | Databáze, auth, realtime          |
-| expo-secure-store        | ~14.1.4     | Bezpečné ukládání tokenů          |
+| expo-secure-store        | ^56.0.0     | Bezpečné ukládání tokenů          |
 | react-native-url-polyfill| ^2.0.0      | URL polyfill pro Supabase         |
 
 ---
