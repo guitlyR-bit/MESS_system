@@ -30,17 +30,27 @@ export interface Club {
 }
 
 export type CourtSurface = 'clay' | 'hard' | 'grass' | 'carpet' | 'indoor';
+export type SportType = 'tennis' | 'badminton' | 'squash' | 'padel' | 'volleyball' | 'basketball' | 'football';
 
 export interface Court {
   id: string;
   club_id: string;
   name: string;
+  sport: SportType;
   surface: CourtSurface;
   is_indoor: boolean;
   is_active: boolean;
   price_per_hour: number;
+  capacity: number;       // max hráčů
   description?: string | null;
   created_at: string;
+}
+
+// Rozšířený typ pro zobrazení v UI (s daty klubu)
+export interface CourtWithClub extends Court {
+  club_name: string;
+  club_city: string;
+  available_today: number;  // počet volných slotů dnes
 }
 
 export type BookingStatus = 'pending' | 'confirmed' | 'cancelled' | 'completed';
@@ -50,12 +60,20 @@ export interface Booking {
   court_id: string;
   player_id: string;
   coach_id?: string | null;
-  starts_at: string;
-  ends_at: string;
+  starts_at: string;   // ISO string
+  ends_at: string;     // ISO string
   status: BookingStatus;
   notes?: string | null;
   price: number;
   created_at: string;
+}
+
+// Pro zobrazení v UI (s daty kurtu a klubu)
+export interface BookingWithCourt extends Booking {
+  court_name: string;
+  court_sport: SportType;
+  club_name: string;
+  club_city: string;
 }
 
 export type MatchStatus = 'scheduled' | 'in_progress' | 'completed' | 'cancelled';
