@@ -16,12 +16,55 @@ import { Ionicons } from '@expo/vector-icons';
 import { colors } from '@/lib/theme';
 import { useClubBookings } from '@/hooks/useClubBookings';
 import {
-  ALL_SLOTS, slotToTime, slotEndTime, slotPrice, fmtDay,
+  ALL_SLOTS, slotToTime, slotEndTime, slotPrice, fmtDay, localDateKey,
   SPORT_LABELS, SURFACE_LABELS, SLOT_COUNT, SLOT_START_HOUR,
   MOCK_REGISTERED_PLAYERS, registeredPlayerFullName, slotDuration,
 } from '@/lib/mockData';
 import type { RegisteredPlayer } from '@/lib/mockData';
 import type { ClubBooking, CourtWithClub, CourtSurface, SportType, PaymentStatus } from '@/types/database';
+
+/** Konec vizuálního bloku na časové ose (stejná geometrie jako render) */
+function bookingDisplayEndMinutes(booking: ClubBooking): number {
+  const slotMin = Math.min(...booking.slots);
+  return SLOT_START_HOUR * 60 + (slotMin + booking.slots.length) * 30;
+}
+
+/** Zda rezervace už proběhla (minulý den v kalendáři, nebo dnes po konci zobrazeného bloku) */
+function isBookingPast(
+  booking: ClubBooking,
+  viewedDateKey: string,
+  todayKey: string,
+  now: Date,
+): boolean {
+  if (viewedDateKey < todayKey) return true;
+  if (viewedDateKey > todayKey) return false;
+  const nowMinutes = now.getHours() * 60 + now.getMinutes();
+  return bookingDisplayEndMinutes(booking) <= nowMinutes;
+}
+
+/** Zda začátek slotu na dnešním dni už proběhl (nelze přetáhnout za časovou linku) */
+function isSlotStartInPastOnToday(
+  slotStart: number,
+  viewedDateKey: string,
+  todayKey: string,
+  nowMinutes: number,
+): boolean {
+  if (viewedDateKey !== todayKey) return false;
+  const startMinutes = SLOT_START_HOUR * 60 + slotStart * 30;
+  return startMinutes < nowMinutes;
+}
+
+/** Volný slot lze rezervovat — na dnešním dni jen pokud konec slotu je po aktuálním čase (aktuální slot zůstává otevřený) */
+function isSlotOpenForNewBooking(
+  slotIdx: number,
+  viewedDateKey: string,
+  todayKey: string,
+  nowMinutes: number,
+): boolean {
+  if (viewedDateKey !== todayKey) return true;
+  const slotEndMinutes = SLOT_START_HOUR * 60 + (slotIdx + 1) * 30;
+  return slotEndMinutes > nowMinutes;
+}
 
 // ─── Konstanty časové osy ─────────────────────────────────────────────────────
 
@@ -43,6 +86,7 @@ const PAYMENT_LABEL: Record<string, string> = {
   pay_on_site: 'Platba na místě',
   pending:     'Nezaplaceno',
 };
+const PAST_BOOKING_BG = '#6B7280';
 
 const W = colors.warm;
 const SPORT_COLORS: Record<string, string> = {
@@ -126,7 +170,7 @@ export default function ClubCourtsScreen() {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function TimelineTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
-  const { courts, getBookingsForDate, moveBooking, updateBooking, createBooking, settings } = hook;
+  const { courts, bookings, getBookingsForDate, moveBooking, updateBooking, createBooking, changeBookingDate, changeBookingDuration, settings } = hook;
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [selectedBooking, setSelectedBooking] = useState<ClubBooking | null>(null);
   const [createDraft, setCreateDraft] = useState<{ courtId: string; slotIdx: number } | null>(null);
@@ -135,14 +179,21 @@ function TimelineTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
   const [calendarVisible, setCalendarVisible] = useState(false);
   const [noteTooltip, setNoteTooltip] = useState<string | null>(null);
 
-  const todayKey = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  // Aktuální čas — aktualizuje se každou minutu (pro linku a zešednutí)
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), 60_000);
+    return () => clearInterval(id);
+  }, []);
+
+  const todayKey = localDateKey(now);
   const days     = useMemo(() => getWeekDays(weekOffset), [weekOffset]);
-  const dateKey  = selectedDate.toISOString().slice(0, 10);
+  const dateKey  = localDateKey(selectedDate);
 
   const handlePrevWeek = useCallback(() => {
     const newOffset = weekOffset - 1;
     const newDays   = getWeekDays(newOffset);
-    const newKeys   = newDays.map(d => d.toISOString().slice(0, 10));
+    const newKeys   = newDays.map(d => localDateKey(d));
     setWeekOffset(newOffset);
     if (!newKeys.includes(dateKey)) setSelectedDate(newDays[6]);
   }, [weekOffset, dateKey]);
@@ -150,14 +201,14 @@ function TimelineTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
   const handleNextWeek = useCallback(() => {
     const newOffset = weekOffset + 1;
     const newDays   = getWeekDays(newOffset);
-    const newKeys   = newDays.map(d => d.toISOString().slice(0, 10));
+    const newKeys   = newDays.map(d => localDateKey(d));
     setWeekOffset(newOffset);
     if (!newKeys.includes(dateKey)) setSelectedDate(newDays[0]);
   }, [weekOffset, dateKey]);
 
   const handleSelectWeek = useCallback((offset: number) => {
     const newDays = getWeekDays(offset);
-    const newKeys = newDays.map(d => d.toISOString().slice(0, 10));
+    const newKeys = newDays.map(d => localDateKey(d));
     setWeekOffset(offset);
     if (!newKeys.includes(dateKey)) setSelectedDate(newDays[0]);
   }, [dateKey]);
@@ -167,7 +218,7 @@ function TimelineTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
     setSelectedDate(new Date());
   }, []);
 
-  const isOnToday = weekOffset === 0 && dateKey === todayKey;
+  const isViewingToday = dateKey === todayKey;
   const dayBooks  = getBookingsForDate(dateKey);
 
   // Mapa obsazených slotů per kurt — pro vykreslení volných buněk
@@ -188,13 +239,6 @@ function TimelineTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
   const contentScrollRef = useRef<ScrollView>(null);
   const scrollXRef       = useRef(0);
   const [scrollEnabled, setScrollEnabled] = useState(true);
-
-  // Aktuální čas — aktualizuje se každou minutu (pro linku a zešednutí)
-  const [now, setNow] = useState(() => new Date());
-  useEffect(() => {
-    const id = setInterval(() => setNow(new Date()), 60_000);
-    return () => clearInterval(id);
-  }, []);
 
   // Stav přetahování (X + Y)
   const [draggingId, setDraggingId]   = useState<string | null>(null);
@@ -224,12 +268,16 @@ function TimelineTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
   // Set ID rezervací, které právě dokončily drag — blokuje onPress v TouchableOpacity
   const justDraggedRef = useRef<Set<string>>(new Set());
 
-  // Drag PanResponder — pohyb > 6px = drag (scroll jinak funguje), tap řeší TouchableOpacity
+  const nowMinutes     = now.getHours() * 60 + now.getMinutes();
+
+  // Drag PanResponder — jen u aktivních rezervací; proběhlé nelze posouvat
   const bookingIds = dayBooks.map(b => b.id).join(',');
   const panResponders = useMemo(() => {
     const map: Record<string, ReturnType<typeof PanResponder.create>> = {};
 
     dayBooks.forEach(booking => {
+      if (isBookingPast(booking, dateKey, todayKey, now)) return;
+
       map[booking.id] = PanResponder.create({
         // Zachytíme gesture AŽ při pohybu — ScrollView tak může fungovat v prázdných oblastech
         onMoveShouldSetPanResponder:        (_, gs) => Math.hypot(gs.dx, gs.dy) > 6,
@@ -248,6 +296,12 @@ function TimelineTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
 
         onPanResponderRelease: (_, gs) => {
           setScrollEnabled(true);
+          if (isBookingPast(booking, dateKey, todayKey, now)) {
+            setDraggingId(null);
+            setDragOffsetX(0);
+            setDragOffsetY(0);
+            return;
+          }
           const info = bookingInfoRef.current[booking.id];
           if (info) {
             const slotDelta   = Math.round(gs.dx / SLOT_W);
@@ -259,8 +313,9 @@ function TimelineTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
             // Použijeme ref pro čerstvá data — zamezí stale closure
             const others   = dayBooksRef.current.filter(b => b.id !== booking.id && b.court_id === newCourtId);
             const conflict = newSlots.some(s => others.some(ob => ob.slots.includes(s)));
-            // Při konfliktu se neprovede žádná akce → rezervace se vrátí na původní místo
-            if (!conflict) moveBookingRef.current(booking.id, newStart, newCourtId);
+            const inPast   = isSlotStartInPastOnToday(newStart, dateKey, todayKey, nowMinutes);
+            // Při konfliktu nebo v minulosti se neprovede žádná akce → rezervace se vrátí
+            if (!conflict && !inPast) moveBookingRef.current(booking.id, newStart, newCourtId);
           }
           setDraggingId(null);
           setDragOffsetX(0);
@@ -278,17 +333,16 @@ function TimelineTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
     });
     return map;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bookingIds, courts]);
+  }, [bookingIds, courts, dateKey, todayKey, nowMinutes]);
 
   const timelineWidth = visibleSlots.length * SLOT_W;
   const timelineH = HEADER_H + courts.length * ROW_H + SCROLLBAR_H;
 
   // Pozice linky aktuálního času (px od začátku viditelné oblasti)
-  const nowMinutes     = now.getHours() * 60 + now.getMinutes();
   const openingMinutes = SLOT_START_HOUR * 60 + settings.openingSlot * 30;
   const nowLineX       = (nowMinutes - openingMinutes) / 30 * SLOT_W;
   const nowLabel       = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-  const showNowLine    = isOnToday && nowLineX >= 0 && nowLineX <= timelineWidth;
+  const showNowLine    = isViewingToday && nowLineX >= 0 && nowLineX <= timelineWidth;
 
   return (
     <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false}
@@ -327,7 +381,7 @@ function TimelineTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
           contentContainerStyle={s.datePickerContent}>
           {days.map((day, i) => {
             const fmt    = fmtDay(day);
-            const dayKey = day.toISOString().slice(0, 10);
+            const dayKey = localDateKey(day);
             const isSel  = dayKey === dateKey;
             const isToday = dayKey === todayKey;
             return (
@@ -344,7 +398,7 @@ function TimelineTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
             );
           })}
         </ScrollView>
-        {!isOnToday && (
+        {!isViewingToday && (
           <TouchableOpacity
             onPress={handleGoToday}
             style={s.todayBtn}
@@ -364,6 +418,10 @@ function TimelineTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
             <Text style={s.legendText}>{PAYMENT_LABEL[k]}</Text>
           </View>
         ))}
+        <View style={s.legendItem}>
+          <View style={[s.legendDot, { backgroundColor: PAST_BOOKING_BG }]} />
+          <Text style={s.legendText}>Proběhlá</Text>
+        </View>
         <Text style={s.legendCount}>{dayBooks.length} rezervací</Text>
       </View>
 
@@ -439,6 +497,14 @@ function TimelineTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
                 <View key={i} style={[s.gridHLine, { top: (i + 1) * ROW_H - 1 }]} />
               ))}
 
+              {/* Zatmavení minulosti na dnešním dni */}
+              {showNowLine && nowLineX > 0 && (
+                <View style={{
+                  position: 'absolute', top: 0, left: 0, width: nowLineX,
+                  height: courts.length * ROW_H, backgroundColor: 'rgba(0,0,0,0.05)', zIndex: 0,
+                }} />
+              )}
+
               {/* Drop target — přesná pozice a velikost cílového slotu */}
               {draggingId && (() => {
                 const info = bookingInfoRef.current[draggingId];
@@ -454,14 +520,16 @@ function TimelineTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
                 );
                 const newSlots = Array.from({ length: info.slotCount }, (_, i) => targetSlot + i);
                 const hasConflict = newSlots.some(s => othersOnTarget.some(ob => ob.slots.includes(s)));
+                const inPast = isSlotStartInPastOnToday(targetSlot, dateKey, todayKey, nowMinutes);
+                const isInvalid = hasConflict || inPast;
                 return (
                   <View style={[s.dropTarget, {
                     top:    targetRow * ROW_H + 3,
                     left:   posInVis * SLOT_W + 2,
                     width:  info.slotCount * SLOT_W - 4,
                     height: ROW_H - 6,
-                    borderColor: hasConflict ? '#EF4444' : 'rgba(99,102,241,0.6)',
-                    backgroundColor: hasConflict ? 'rgba(239,68,68,0.12)' : 'rgba(99,102,241,0.1)',
+                    borderColor: isInvalid ? '#EF4444' : 'rgba(99,102,241,0.6)',
+                    backgroundColor: isInvalid ? 'rgba(239,68,68,0.12)' : 'rgba(99,102,241,0.1)',
                   }]} />
                 );
               })()}
@@ -482,6 +550,7 @@ function TimelineTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
                 visibleSlots
                   .filter(idx => idx <= settings.closingSlot)
                   .filter(idx => !occupiedByCourt[court.id]?.has(idx))
+                  .filter(idx => isSlotOpenForNewBooking(idx, dateKey, todayKey, nowMinutes))
                   .map(slotIdx => {
                     const slotKey = `${court.id}-${slotIdx}`;
                     const isHovered = hoveredSlotKey === slotKey;
@@ -535,10 +604,9 @@ function TimelineTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
                 const rawLeft      = posInVisible * SLOT_W;
                 const displayLeft  = rawLeft + (isDragging ? dragOffsetX : 0);
                 const displayTop   = courtIdx * ROW_H + (isDragging ? dragOffsetY : 0);
-                // Zešednutí: rezervace v minulosti (dnes, konec bloku před now)
-                const endMinutes  = SLOT_START_HOUR * 60 + (Math.max(...booking.slots) + 1) * 30;
-                const isPast      = isOnToday && endMinutes <= nowMinutes;
-                const bgColor     = isPast ? '#6B7280' : (PAYMENT_BG[booking.payment_status] ?? '#94A3B8');
+                // Zešednutí: minulý den, nebo dnes po konci slotu
+                const isPast   = isBookingPast(booking, dateKey, todayKey, now);
+                const bgColor  = isPast ? PAST_BOOKING_BG : (PAYMENT_BG[booking.payment_status] ?? '#94A3B8');
 
                 return (
                   <View
@@ -550,12 +618,14 @@ function TimelineTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
                         top:       displayTop + 4,
                         width:     slotCount * SLOT_W - 4,
                         height:    ROW_H - 8,
-                        opacity:   isDragging ? 0.82 : 1,
+                        opacity:   isDragging ? 0.82 : (isPast ? 0.88 : 1),
                         zIndex:    isDragging ? 20 : 1,
                         elevation: isDragging ? 8 : 2,
+                        backgroundColor: bgColor,
+                        ...(Platform.OS === 'web' && isPast ? { cursor: 'default' } as object : {}),
                       },
                     ]}
-                    {...(panResponders[booking.id]?.panHandlers ?? {})}
+                    {...(isPast ? {} : panResponders[booking.id]?.panHandlers ?? {})}
                   >
                     {/* TouchableOpacity pro tap→detail; po dragu ignoruje onPress díky justDraggedRef */}
                     <TouchableOpacity
@@ -604,7 +674,9 @@ function TimelineTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
         </View>
       </View>
 
-      <Text style={s.dragHint}>Táhněte blok rezervace pro přesunutí · klepněte pro detail · volný slot pro novou rezervaci</Text>
+      <Text style={s.dragHint}>
+        Táhněte aktivní rezervaci pro přesunutí · nelze do minulosti · klepněte pro detail
+      </Text>
 
       {/* Výběr týdne — kalendář */}
       <WeekPickerModal
@@ -620,10 +692,42 @@ function TimelineTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
         <BookingDetailModal
           booking={selectedBooking}
           court={courts.find(c => c.id === selectedBooking.court_id) ?? null}
+          maxBookingDaysAhead={settings.maxBookingDaysAhead}
+          closingSlot={settings.closingSlot}
+          occupiedSlots={(() => {
+            const set = new Set<number>();
+            bookings
+              .filter(b =>
+                b.id !== selectedBooking.id
+                && b.date === selectedBooking.date
+                && b.court_id === selectedBooking.court_id
+                && b.status !== 'cancelled'
+              )
+              .forEach(b => b.slots.forEach(s => set.add(s)));
+            return set;
+          })()}
           onClose={() => setSelectedBooking(null)}
           onUpdatePayment={(status) => {
             updateBooking(selectedBooking.id, { payment_status: status });
             setSelectedBooking(prev => prev ? { ...prev, payment_status: status } : null);
+          }}
+          onChangeDate={(newDate) => {
+            const result = changeBookingDate(selectedBooking.id, newDate);
+            if (result.ok) {
+              setSelectedBooking(result.booking);
+              if (newDate !== dateKey) {
+                const [y, m, d] = newDate.split('-').map(Number);
+                const picked = new Date(y, m - 1, d, 12, 0, 0);
+                setSelectedDate(picked);
+                setWeekOffset(getWeekOffsetForDate(picked));
+              }
+            }
+            return result;
+          }}
+          onChangeDuration={(durationMinutes) => {
+            const result = changeBookingDuration(selectedBooking.id, durationMinutes);
+            if (result.ok) setSelectedBooking(result.booking);
+            return result;
           }}
           onCancel={() => {
             updateBooking(selectedBooking.id, { status: 'cancelled' });
@@ -719,6 +823,142 @@ const nt = StyleSheet.create({
   },
 });
 
+// ─── Kalendářový výběr jednoho dne (detail rezervace) ─────────────────────────
+
+function DayPickerModal({ visible, selectedDateKey, onSelectDate, onClose, maxBookingDaysAhead }: {
+  visible: boolean;
+  selectedDateKey: string;
+  onSelectDate: (dateKey: string) => void;
+  onClose: () => void;
+  maxBookingDaysAhead: number;
+}) {
+  const [dispMonth, setDispMonth] = useState(0);
+  const [dispYear,  setDispYear]  = useState(() => new Date().getFullYear());
+
+  useEffect(() => {
+    if (visible && selectedDateKey) {
+      const [y, m] = selectedDateKey.split('-').map(Number);
+      setDispMonth(m - 1);
+      setDispYear(y);
+    }
+  }, [visible, selectedDateKey]);
+
+  const todayKey = localDateKey();
+  const bookingDeadline = useMemo(() => {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    d.setDate(d.getDate() + maxBookingDaysAhead);
+    return d;
+  }, [maxBookingDaysAhead]);
+
+  const rows = useMemo(() => {
+    const first = new Date(dispYear, dispMonth, 1);
+    const start = getMonday(first);
+    const all   = Array.from({ length: 42 }, (_, i) => {
+      const d = new Date(start);
+      d.setDate(d.getDate() + i);
+      return d;
+    });
+    const result: Date[][] = [];
+    for (let i = 0; i < 42; i += 7) result.push(all.slice(i, i + 7));
+    return result;
+  }, [dispYear, dispMonth]);
+
+  const goPrev = () => {
+    if (dispMonth === 0) { setDispMonth(11); setDispYear(y => y - 1); }
+    else setDispMonth(m => m - 1);
+  };
+  const goNext = () => {
+    if (dispMonth === 11) { setDispMonth(0); setDispYear(y => y + 1); }
+    else setDispMonth(m => m + 1);
+  };
+
+  function handleDayPress(date: Date) {
+    const key = localDateKey(date);
+    const dateNorm = new Date(date);
+    dateNorm.setHours(0, 0, 0, 0);
+    if (key < todayKey || dateNorm > bookingDeadline) return;
+    onSelectDate(key);
+    onClose();
+  }
+
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <TouchableWithoutFeedback onPress={onClose}>
+        <View style={cal.overlay}>
+          <TouchableWithoutFeedback onPress={() => {}}>
+            <View style={cal.sheet}>
+              <View style={cal.topBar} />
+              <View style={cal.header}>
+                <TouchableOpacity onPress={goPrev} style={cal.navBtn}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                  <Ionicons name="chevron-back" size={20} color={W.orange} />
+                </TouchableOpacity>
+                <Text style={cal.monthLabel}>
+                  {MONTH_NAMES[dispMonth]} {dispYear}
+                </Text>
+                <TouchableOpacity onPress={goNext} style={cal.navBtn}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                  <Ionicons name="chevron-forward" size={20} color={W.orange} />
+                </TouchableOpacity>
+              </View>
+              <View style={cal.dayLabelsRow}>
+                {DAY_ABBR.map(label => (
+                  <View key={label} style={cal.dayLabelCell}>
+                    <Text style={cal.dayLabelText}>{label}</Text>
+                  </View>
+                ))}
+              </View>
+              {rows.map((row, ri) => (
+                <View key={ri} style={cal.gridRow}>
+                  {row.map((date, ci) => {
+                    const key      = localDateKey(date);
+                    const inMonth  = date.getMonth() === dispMonth;
+                    const isSel    = key === selectedDateKey;
+                    const isToday  = key === todayKey;
+                    const dateNorm = new Date(date);
+                    dateNorm.setHours(0, 0, 0, 0);
+                    const isPast   = key < todayKey;
+                    const isBeyond = dateNorm > bookingDeadline;
+                    const disabled = isPast || isBeyond;
+                    return (
+                      <TouchableOpacity
+                        key={ci}
+                        onPress={() => handleDayPress(date)}
+                        disabled={disabled}
+                        activeOpacity={0.65}
+                        style={[cal.dayCell, isSel && cal.dayCellActive]}
+                      >
+                        <Text style={[
+                          cal.dayNum,
+                          !inMonth && cal.dayNumFaded,
+                          disabled && inMonth && cal.dayNumBeyond,
+                          isSel && cal.dayNumActive,
+                        ]}>
+                          {date.getDate()}
+                        </Text>
+                        {isBeyond && inMonth && !isSel && (
+                          <Ionicons name="lock-closed-outline" size={7} color={colors.textDisabled} style={cal.beyondIcon} />
+                        )}
+                        {isToday && !isSel && (
+                          <View style={cal.todayDot} />
+                        )}
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              ))}
+              <TouchableOpacity onPress={onClose} style={cal.footer}>
+                <Text style={cal.footerText}>ZAVŘÍT</Text>
+              </TouchableOpacity>
+            </View>
+          </TouchableWithoutFeedback>
+        </View>
+      </TouchableWithoutFeedback>
+    </Modal>
+  );
+}
+
 // ─── Kalendářový výběr týdne ─────────────────────────────────────────────────
 
 function WeekPickerModal({ visible, weekOffset, onSelectWeek, onClose, maxBookingDaysAhead }: {
@@ -742,10 +982,10 @@ function WeekPickerModal({ visible, weekOffset, onSelectWeek, onClose, maxBookin
   }, [visible]);
 
   const selectedWeekKeys = useMemo(
-    () => getWeekDays(weekOffset).map(d => d.toISOString().slice(0, 10)),
+    () => getWeekDays(weekOffset).map(d => localDateKey(d)),
     [weekOffset],
   );
-  const todayKey = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const todayKey = localDateKey();
 
   // Poslední dostupný den pro rezervaci (inclusive)
   const bookingDeadline = useMemo(() => {
@@ -818,12 +1058,12 @@ function WeekPickerModal({ visible, weekOffset, onSelectWeek, onClose, maxBookin
 
               {/* Mřížka dní — řádek = týden */}
               {rows.map((row, ri) => {
-                const mondayKey = row[0].toISOString().slice(0, 10);
+                const mondayKey = localDateKey(row[0]);
                 const isSelRow  = selectedWeekKeys.includes(mondayKey);
                 return (
                   <View key={ri} style={[cal.gridRow, isSelRow && cal.gridRowSelected]}>
                     {row.map((date, ci) => {
-                      const key      = date.toISOString().slice(0, 10);
+                      const key      = localDateKey(date);
                       const inMonth  = date.getMonth() === dispMonth;
                       const isSel    = selectedWeekKeys.includes(key);
                       const isToday  = key === todayKey;
@@ -949,7 +1189,7 @@ function ClubBookingCreateModal({ court, date, slotIdx, closingSlot, occupiedSlo
 
   const courtData = court;
   const accent   = SPORT_COLORS[courtData.sport] ?? W.orange;
-  const dateKey  = date.toISOString().slice(0, 10);
+  const dateKey  = localDateKey(date);
   const fmt      = fmtDay(date);
   const slots    = slotsForDuration(slotIdx, durationMinutes);
   const slotMax  = Math.max(...slots);
@@ -961,6 +1201,11 @@ function ClubBookingCreateModal({ court, date, slotIdx, closingSlot, occupiedSlo
   const canSave = durationValid && playerValid;
 
   function handleSave() {
+    const now = new Date();
+    if (!isSlotOpenForNewBooking(slotIdx, dateKey, localDateKey(now), now.getHours() * 60 + now.getMinutes())) {
+      setError('Tento čas už proběhl — vyberte budoucí slot.');
+      return;
+    }
     if (!durationValid) {
       setError('Vybraná délka přesahuje provozní dobu nebo koliduje s jinou rezervací.');
       return;
@@ -1208,22 +1453,53 @@ function ClubBookingCreateModal({ court, date, slotIdx, closingSlot, occupiedSlo
 
 // ─── Detail rezervace (popup) ─────────────────────────────────────────────────
 
-function BookingDetailModal({ booking, court, onClose, onUpdatePayment, onCancel }: {
+function BookingDetailModal({ booking, court, maxBookingDaysAhead, closingSlot, occupiedSlots, onClose, onUpdatePayment, onChangeDate, onChangeDuration, onCancel }: {
   booking: ClubBooking;
   court: CourtWithClub | null;
+  maxBookingDaysAhead: number;
+  closingSlot: number;
+  occupiedSlots: Set<number>;
   onClose: () => void;
   onUpdatePayment: (status: 'paid' | 'pay_on_site' | 'pending') => void;
+  onChangeDate: (newDate: string) => { ok: true; booking: ClubBooking } | { ok: false; error: string };
+  onChangeDuration: (durationMinutes: number) => { ok: true; booking: ClubBooking } | { ok: false; error: string };
   onCancel: () => void;
 }) {
-  const [confirmCancel, setConfirmCancel] = useState(false);
+  const [confirmCancel, setConfirmCancel]   = useState(false);
+  const [datePickerVisible, setDatePickerVisible] = useState(false);
+  const [dateError, setDateError]           = useState<string | null>(null);
+  const [durationError, setDurationError]   = useState<string | null>(null);
   const accent    = SPORT_COLORS[court?.sport ?? 'tennis'] ?? W.orange;
   const slotMin   = Math.min(...booking.slots);
   const slotMax   = Math.max(...booking.slots);
-  const bgColor   = PAYMENT_BG[booking.payment_status];
+  const now        = new Date();
+  const todayKey   = localDateKey(now);
+  const isPast     = isBookingPast(booking, booking.date, todayKey, now);
+  const bgColor    = isPast ? PAST_BOOKING_BG : PAYMENT_BG[booking.payment_status];
+  const currentDuration = booking.slots.length * 30;
 
-  // Formátování data
   const dateObj = new Date(booking.date + 'T12:00:00');
   const fmt     = fmtDay(dateObj);
+
+  function handleDateSelect(dayKey: string) {
+    if (dayKey === booking.date) {
+      setDateError(null);
+      return;
+    }
+    const result = onChangeDate(dayKey);
+    if (result.ok) setDateError(null);
+    else setDateError(result.error);
+  }
+
+  function handleDurationPick(mins: number) {
+    if (mins === currentDuration) {
+      setDurationError(null);
+      return;
+    }
+    const result = onChangeDuration(mins);
+    if (result.ok) setDurationError(null);
+    else setDurationError(result.error);
+  }
 
   return (
     <Modal visible transparent animationType="slide" onRequestClose={onClose}>
@@ -1235,7 +1511,9 @@ function BookingDetailModal({ booking, court, onClose, onUpdatePayment, onCancel
           <View style={[s.detailHeader, { backgroundColor: bgColor }]}>
             <View style={{ flex: 1 }}>
               <View style={s.detailPayBadge}>
-                <Text style={s.detailPayBadgeText}>{PAYMENT_LABEL[booking.payment_status]}</Text>
+                <Text style={s.detailPayBadgeText}>
+                  {isPast ? 'Proběhlá' : PAYMENT_LABEL[booking.payment_status]}
+                </Text>
               </View>
               <Text style={s.detailPlayerName}>{booking.player_name}</Text>
             </View>
@@ -1247,12 +1525,58 @@ function BookingDetailModal({ booking, court, onClose, onUpdatePayment, onCancel
           <ScrollView>
             {/* Info řádky */}
             <View style={s.detailRows}>
-              <DetailRow icon="calendar-outline" label="Datum"
-                value={`${fmt.short} ${fmt.num}. ${fmt.month} ${dateObj.getFullYear()}`} />
+              {!isPast ? (
+                <TouchableOpacity
+                  style={s.detailRowTouchable}
+                  onPress={() => setDatePickerVisible(true)}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons name="calendar-outline" size={16} color={colors.textMuted} style={{ width: 22 }} />
+                  <Text style={s.detailRowLabel}>Datum</Text>
+                  <Text style={s.detailRowValue}>
+                    {fmt.short} {fmt.num}. {fmt.month} {dateObj.getFullYear()}
+                  </Text>
+                  <Ionicons name="chevron-forward" size={16} color={colors.textMuted} />
+                </TouchableOpacity>
+              ) : (
+                <DetailRow icon="calendar-outline" label="Datum"
+                  value={`${fmt.short} ${fmt.num}. ${fmt.month} ${dateObj.getFullYear()}`} />
+              )}
               <DetailRow icon="time-outline" label="Čas"
                 value={`${slotToTime(slotMin)} – ${slotEndTime(slotMax)}`} />
-              <DetailRow icon="hourglass-outline" label="Trvání"
-                value={`${booking.slots.length * 30} min`} />
+              {!isPast ? (
+                <>
+                  <Text style={[s.fieldLabel, { marginTop: 8, marginBottom: 0 }]}>TRVÁNÍ</Text>
+                  <View style={[s.chipRow, { marginTop: 8 }]}>
+                    {DURATION_OPTIONS.map(mins => {
+                      const valid = isDurationValid(mins, slotMin, closingSlot, occupiedSlots);
+                      const selected = currentDuration === mins;
+                      return (
+                        <TouchableOpacity
+                          key={mins}
+                          disabled={!valid}
+                          onPress={() => handleDurationPick(mins)}
+                          style={[
+                            s.chip,
+                            selected && { backgroundColor: accent, borderColor: 'transparent' },
+                            !valid && { opacity: 0.35 },
+                          ]}
+                        >
+                          <Text style={[s.chipText, selected && { color: '#fff' }]}>
+                            {slotDuration(mins / 30)}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                  {durationError && (
+                    <Text style={s.detailDateError}>{durationError}</Text>
+                  )}
+                </>
+              ) : (
+                <DetailRow icon="hourglass-outline" label="Trvání"
+                  value={`${booking.slots.length * 30} min`} />
+              )}
               <DetailRow icon="location-outline" label="Kurt"
                 value={court?.name ?? booking.court_id} />
               <DetailRow icon="cash-outline" label="Cena"
@@ -1263,54 +1587,75 @@ function BookingDetailModal({ booking, court, onClose, onUpdatePayment, onCancel
                   <Text style={s.detailNoteText}>{booking.note}</Text>
                 </View>
               )}
+              {dateError && (
+                <Text style={s.detailDateError}>{dateError}</Text>
+              )}
             </View>
 
-            {/* Změna platebního stavu */}
-            <Text style={s.detailSectionLabel}>PLATEBNÍ STAV</Text>
-            <View style={s.detailPayRow}>
-              {(Object.keys(PAYMENT_BG) as (keyof typeof PAYMENT_BG)[]).map(k => (
-                <TouchableOpacity
-                  key={k}
-                  onPress={() => onUpdatePayment(k as any)}
-                  style={[
-                    s.detailPayChip,
-                    { borderColor: PAYMENT_BG[k] },
-                    booking.payment_status === k && { backgroundColor: PAYMENT_BG[k] },
-                  ]}
-                >
-                  <Text style={[
-                    s.detailPayChipText,
-                    booking.payment_status === k ? { color: '#fff' } : { color: PAYMENT_BG[k] },
-                  ]}>
-                    {PAYMENT_LABEL[k]}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-
-            {/* Zrušení */}
-            {!confirmCancel ? (
-              <TouchableOpacity onPress={() => setConfirmCancel(true)} style={s.detailCancelBtn}>
-                <Ionicons name="trash-outline" size={16} color={colors.error} />
-                <Text style={s.detailCancelText}>Zrušit rezervaci</Text>
-              </TouchableOpacity>
-            ) : (
-              <View style={s.detailConfirmCancel}>
-                <Text style={s.detailConfirmText}>Opravdu zrušit rezervaci?</Text>
-                <View style={s.detailConfirmBtns}>
-                  <TouchableOpacity onPress={() => setConfirmCancel(false)} style={s.detailConfirmNo}>
-                    <Text style={s.detailConfirmNoText}>Ne</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity onPress={onCancel} style={s.detailConfirmYes}>
-                    <Text style={s.detailConfirmYesText}>ANO, ZRUŠIT</Text>
-                  </TouchableOpacity>
-                </View>
+            {/* Změna platebního stavu / proběhlá rezervace */}
+            {isPast ? (
+              <View style={s.detailPastNotice}>
+                <Ionicons name="lock-closed-outline" size={16} color={colors.textMuted} />
+                <Text style={s.detailPastNoticeText}>
+                  Proběhlá rezervace — nelze měnit ani zrušit
+                </Text>
               </View>
+            ) : (
+              <>
+                <Text style={s.detailSectionLabel}>PLATEBNÍ STAV</Text>
+                <View style={s.detailPayRow}>
+                  {(Object.keys(PAYMENT_BG) as (keyof typeof PAYMENT_BG)[]).map(k => (
+                    <TouchableOpacity
+                      key={k}
+                      onPress={() => onUpdatePayment(k as PaymentStatus)}
+                      style={[
+                        s.detailPayChip,
+                        { borderColor: PAYMENT_BG[k] },
+                        booking.payment_status === k && { backgroundColor: PAYMENT_BG[k] },
+                      ]}
+                    >
+                      <Text style={[
+                        s.detailPayChipText,
+                        booking.payment_status === k ? { color: '#fff' } : { color: PAYMENT_BG[k] },
+                      ]}>
+                        {PAYMENT_LABEL[k]}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+
+                {!confirmCancel ? (
+                  <TouchableOpacity onPress={() => setConfirmCancel(true)} style={s.detailCancelBtn}>
+                    <Ionicons name="trash-outline" size={16} color={colors.error} />
+                    <Text style={s.detailCancelText}>Zrušit rezervaci</Text>
+                  </TouchableOpacity>
+                ) : (
+                  <View style={s.detailConfirmCancel}>
+                    <Text style={s.detailConfirmText}>Opravdu zrušit rezervaci?</Text>
+                    <View style={s.detailConfirmBtns}>
+                      <TouchableOpacity onPress={() => setConfirmCancel(false)} style={s.detailConfirmNo}>
+                        <Text style={s.detailConfirmNoText}>Ne</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity onPress={onCancel} style={s.detailConfirmYes}>
+                        <Text style={s.detailConfirmYesText}>ANO, ZRUŠIT</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                )}
+              </>
             )}
             <View style={{ height: 24 }} />
           </ScrollView>
         </View>
       </View>
+
+      <DayPickerModal
+        visible={datePickerVisible}
+        selectedDateKey={booking.date}
+        maxBookingDaysAhead={maxBookingDaysAhead}
+        onSelectDate={handleDateSelect}
+        onClose={() => setDatePickerVisible(false)}
+      />
     </Modal>
   );
 }
@@ -1805,6 +2150,10 @@ const s = StyleSheet.create({
   detailCloseBtn: { padding: 4, marginTop: -4 },
   detailRows: { paddingHorizontal: 16, paddingTop: 16, gap: 12 },
   detailRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  detailRowTouchable: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    paddingVertical: 4, marginBottom: 4,
+  },
   detailRowLabel: { fontSize: 13, color: colors.textMuted, width: 64 },
   detailRowValue: { fontSize: 14, fontWeight: '700', color: colors.textPrimary, flex: 1 },
   detailSectionLabel: { fontSize: 10, fontWeight: '900', color: colors.textMuted, letterSpacing: 1.5, paddingHorizontal: 16, paddingTop: 20, paddingBottom: 10 },
@@ -1822,6 +2171,26 @@ const s = StyleSheet.create({
   detailConfirmNoText: { fontSize: 13, fontWeight: '700', color: colors.textSecondary },
   detailConfirmYes: { flex: 2, height: 44, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.error },
   detailConfirmYesText: { fontSize: 12, fontWeight: '900', color: '#fff', letterSpacing: 1 },
+  detailPastNotice: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    marginHorizontal: 16, marginTop: 20, padding: 14,
+    backgroundColor: colors.bgAlt, borderWidth: 1, borderColor: colors.border,
+  },
+  detailPastNoticeText: { fontSize: 13, color: colors.textMuted, fontWeight: '600', flex: 1 },
+  detailDateHint: { fontSize: 11, color: colors.textMuted, paddingHorizontal: 16, marginBottom: 8 },
+  detailDatePickerContent: { paddingHorizontal: 16, gap: 8, paddingBottom: 4 },
+  detailDayChip: {
+    alignItems: 'center', paddingHorizontal: 12, paddingVertical: 7,
+    backgroundColor: colors.bgAlt, borderWidth: 1, borderColor: colors.border, minWidth: 50,
+  },
+  detailDayChipActive: { backgroundColor: W.orange, borderColor: W.orange },
+  detailDayChipWD:    { fontSize: 9,  fontWeight: '800', color: colors.textMuted, letterSpacing: 1 },
+  detailDayChipNum:   { fontSize: 17, fontWeight: '900', color: colors.textPrimary, lineHeight: 22 },
+  detailDayChipMonth: { fontSize: 9,  color: colors.textMuted },
+  detailDateError: {
+    fontSize: 12, color: colors.error, fontWeight: '600',
+    paddingHorizontal: 16, paddingTop: 8,
+  },
 });
 
 // ─── Styly kalendáře ──────────────────────────────────────────────────────────
@@ -1888,6 +2257,10 @@ const cal = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  dayCellActive: {
+    backgroundColor: W.orange,
+    borderRadius: 6,
+  },
   dayCellLeft: {
     borderTopLeftRadius: 4,
     borderBottomLeftRadius: 4,
@@ -1914,6 +2287,10 @@ const cal = StyleSheet.create({
   },
   dayNumSelected: {
     color: W.orange,
+    fontWeight: '900',
+  },
+  dayNumActive: {
+    color: '#fff',
     fontWeight: '900',
   },
   todayDot: {

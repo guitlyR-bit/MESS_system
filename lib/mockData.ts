@@ -257,11 +257,19 @@ export const MOCK_MY_BOOKINGS: BookingWithCourt[] = [
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
+/** Lokální kalendářní datum jako 'YYYY-MM-DD' (bez UTC posunu) */
+export function localDateKey(d: Date = new Date()): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
 /** Vrátí datum za +daysOffset dní jako 'YYYY-MM-DD' */
 export function todayStr(daysOffset = 0): string {
   const d = new Date();
   d.setDate(d.getDate() + daysOffset);
-  return d.toISOString().slice(0, 10);
+  return localDateKey(d);
 }
 
 /** Vrátí ISO string pro daný den a hodinu */
@@ -270,6 +278,16 @@ export function todayISO(daysOffset: number, hour: number): string {
   d.setDate(d.getDate() + daysOffset);
   d.setHours(hour, 0, 0, 0);
   return d.toISOString();
+}
+
+/** Vrátí array dnů od dnes do +maxDaysAhead (včetně) */
+export function getBookableDays(maxDaysAhead: number): Date[] {
+  return Array.from({ length: maxDaysAhead + 1 }, (_, i) => {
+    const d = new Date();
+    d.setHours(12, 0, 0, 0);
+    d.setDate(d.getDate() + i);
+    return d;
+  });
 }
 
 /** Vrátí array 14 dnů od dnes */
@@ -361,7 +379,8 @@ function mkCB(
   };
 }
 
-export const MOCK_CLUB_BOOKINGS: ClubBooking[] = [
+export function createMockClubBookings(): ClubBooking[] {
+  return [
   // Dnes — Dvorec 1 (c1)
   mkCB('cb1',  'c1', 'Jan Novák',           0, [18,19,20],           250, 'paid',        'Prosím dvorec u branky, přijíždím na kole.'),
   mkCB('cb2',  'c1', 'Petra Marková',        0, [28,29,30,31],        250, 'pay_on_site'),
@@ -388,7 +407,11 @@ export const MOCK_CLUB_BOOKINGS: ClubBooking[] = [
   // Zítra — Hala c3
   mkCB('cb16', 'c3', 'Roman Blažek',         1, [18,19,20],           180, 'pending'),
   mkCB('cb17', 'c3', 'Tereza Nováková',      1, [28,29,30,31,32,33],  180, 'pay_on_site'),
-];
+  ];
+}
+
+/** Mock rezervace — při importu modulu; pro runtime použij createMockClubBookings() */
+export const MOCK_CLUB_BOOKINGS: ClubBooking[] = createMockClubBookings();
 
 export const MOCK_CLUB_SETTINGS: ClubSettings = {
   editLockHours:        24,   // hráč nemůže editovat méně než 24h před rezervací

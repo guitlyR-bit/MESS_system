@@ -1,16 +1,18 @@
 import { useState, useCallback } from 'react';
 import type { ClubBooking, ClubSettings, CourtWithClub, PaymentStatus } from '@/types/database';
 import {
-  MOCK_CLUB_BOOKINGS,
+  createMockClubBookings,
   MOCK_CLUB_SETTINGS,
   MOCK_COURTS,
   slotToTime,
   slotEndTime,
   SLOT_COUNT,
+  localDateKey,
+  slotPrice,
 } from '@/lib/mockData';
 
 export function useClubBookings() {
-  const [bookings, setBookings]   = useState<ClubBooking[]>(MOCK_CLUB_BOOKINGS);
+  const [bookings, setBookings]   = useState<ClubBooking[]>(createMockClubBookings);
   const [settings, setSettings]   = useState<ClubSettings>(MOCK_CLUB_SETTINGS);
   const [courts,   setCourts]     = useState<CourtWithClub[]>(MOCK_COURTS);
 
@@ -55,6 +57,101 @@ export function useClubBookings() {
   const updateBooking = useCallback((id: string, updates: Partial<ClubBooking>) => {
     setBookings(prev => prev.map(b => b.id === id ? { ...b, ...updates } : b));
   }, []);
+
+  /** Přesune rezervaci na jiný den (jen dnes nebo budoucí, do maxBookingDaysAhead) */
+  const changeBookingDate = useCallback((
+    bookingId: string,
+    newDate: string,
+  ): { ok: true; booking: ClubBooking } | { ok: false; error: string } => {
+    const booking = bookings.find(b => b.id === bookingId);
+    if (!booking) return { ok: false, error: 'Rezervace nenalezena' };
+
+    const todayKey = localDateKey();
+    if (newDate < todayKey) {
+      return { ok: false, error: 'Datum nemůže být v minulosti' };
+    }
+
+    const maxD = new Date();
+    maxD.setHours(12, 0, 0, 0);
+    maxD.setDate(maxD.getDate() + settings.maxBookingDaysAhead);
+    const maxKey = localDateKey(maxD);
+    if (newDate > maxKey) {
+      return { ok: false, error: `Maximálně ${settings.maxBookingDaysAhead} dní dopředu` };
+    }
+
+    if (newDate === booking.date) {
+      return { ok: true, booking };
+    }
+
+    const conflict = bookings.some(b =>
+      b.id !== bookingId
+      && b.date === newDate
+      && b.status !== 'cancelled'
+      && b.court_id === booking.court_id
+      && booking.slots.some(s => b.slots.includes(s))
+    );
+    if (conflict) {
+      return { ok: false, error: 'V zvolený den je kurt v tomto čase obsazený' };
+    }
+
+    const slotMin = Math.min(...booking.slots);
+    const slotMax = Math.max(...booking.slots);
+    const updated: ClubBooking = {
+      ...booking,
+      date: newDate,
+      starts_at: `${newDate}T${slotToTime(slotMin)}:00.000Z`,
+      ends_at:   `${newDate}T${slotEndTime(slotMax)}:00.000Z`,
+    };
+
+    setBookings(prev => prev.map(b => b.id === bookingId ? updated : b));
+    return { ok: true, booking: updated };
+  }, [bookings, settings.maxBookingDaysAhead]);
+
+  /** Změní délku rezervace (stejný začátek, po sobě jdoucí sloty) */
+  const changeBookingDuration = useCallback((
+    bookingId: string,
+    durationMinutes: number,
+  ): { ok: true; booking: ClubBooking } | { ok: false; error: string } => {
+    if (durationMinutes % 30 !== 0 || durationMinutes < 30) {
+      return { ok: false, error: 'Neplatná délka rezervace' };
+    }
+
+    const booking = bookings.find(b => b.id === bookingId);
+    if (!booking) return { ok: false, error: 'Rezervace nenalezena' };
+
+    const slotMin = Math.min(...booking.slots);
+    const count   = durationMinutes / 30;
+    const newSlots = Array.from({ length: count }, (_, i) => slotMin + i);
+
+    if (Math.max(...newSlots) > settings.closingSlot) {
+      return { ok: false, error: 'Délka přesahuje provozní dobu' };
+    }
+
+    const conflict = bookings.some(b =>
+      b.id !== bookingId
+      && b.date === booking.date
+      && b.status !== 'cancelled'
+      && b.court_id === booking.court_id
+      && newSlots.some(s => b.slots.includes(s))
+    );
+    if (conflict) {
+      return { ok: false, error: 'Prodloužení koliduje s jinou rezervací' };
+    }
+
+    const court = courts.find(c => c.id === booking.court_id);
+    const pricePerHour = court?.price_per_hour ?? 0;
+    const slotMax = Math.max(...newSlots);
+    const updated: ClubBooking = {
+      ...booking,
+      slots: newSlots,
+      price: slotPrice(newSlots.length, pricePerHour),
+      starts_at: `${booking.date}T${slotToTime(slotMin)}:00.000Z`,
+      ends_at:   `${booking.date}T${slotEndTime(slotMax)}:00.000Z`,
+    };
+
+    setBookings(prev => prev.map(b => b.id === bookingId ? updated : b));
+    return { ok: true, booking: updated };
+  }, [bookings, courts, settings.closingSlot]);
 
   /** Vytvoří novou rezervaci (správce klubu) */
   const createBooking = useCallback((params: {
@@ -103,7 +200,7 @@ export function useClubBookings() {
 
   return {
     bookings, settings, courts,
-    moveBooking, updateBooking, createBooking, updateCourt, updateSettings,
+    moveBooking, updateBooking, createBooking, changeBookingDate, changeBookingDuration, updateCourt, updateSettings,
     getBookingsForDate, canPlayerEdit,
   };
 }
