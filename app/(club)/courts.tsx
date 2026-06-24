@@ -178,6 +178,7 @@ function TimelineTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
   const [weekOffset, setWeekOffset] = useState(0);
   const [calendarVisible, setCalendarVisible] = useState(false);
   const [noteTooltip, setNoteTooltip] = useState<string | null>(null);
+  const [hoveredUnpaidAlertId, setHoveredUnpaidAlertId] = useState<string | null>(null);
 
   // Aktuální čas — aktualizuje se každou minutu (pro linku a zešednutí)
   const [now, setNow] = useState(() => new Date());
@@ -607,6 +608,7 @@ function TimelineTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
                 // Zešednutí: minulý den, nebo dnes po konci slotu
                 const isPast   = isBookingPast(booking, dateKey, todayKey, now);
                 const bgColor  = isPast ? PAST_BOOKING_BG : (PAYMENT_BG[booking.payment_status] ?? '#94A3B8');
+                const showUnpaidAlert = isPast && booking.payment_status === 'pending';
 
                 return (
                   <View
@@ -639,13 +641,22 @@ function TimelineTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
                       }}
                       style={[s.bookingInner, { backgroundColor: bgColor }]}
                     >
-                      <Text numberOfLines={1} style={s.bookingName}>
-                        {booking.player_name}
-                      </Text>
-                      <Text numberOfLines={1} style={s.bookingMeta}>
-                        {slotToTime(slotMin)}–{slotEndTime(Math.max(...booking.slots))}
-                        {slotCount >= 2 ? ` · ${booking.price} Kč` : ''}
-                      </Text>
+                      <View style={s.bookingTextCol}>
+                        <Text numberOfLines={1} style={s.bookingName}>
+                          {booking.player_name}
+                        </Text>
+                        <Text numberOfLines={1} style={s.bookingMeta}>
+                          {slotToTime(slotMin)}–{slotEndTime(Math.max(...booking.slots))}
+                          {slotCount >= 2 ? ` · ${booking.price} Kč` : ''}
+                        </Text>
+                      </View>
+                      {showUnpaidAlert && (
+                        <UnpaidAlertIcon
+                          hovered={hoveredUnpaidAlertId === booking.id}
+                          onHoverIn={() => setHoveredUnpaidAlertId(booking.id)}
+                          onHoverOut={() => setHoveredUnpaidAlertId(id => id === booking.id ? null : id)}
+                        />
+                      )}
                     </TouchableOpacity>
                     {booking.note && (
                       <TouchableOpacity
@@ -757,6 +768,32 @@ function TimelineTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
         <NoteTooltipModal note={noteTooltip} onClose={() => setNoteTooltip(null)} />
       )}
     </ScrollView>
+  );
+}
+
+// ─── Nezaplacená proběhlá rezervace — vykřičník za textem ───────────────────
+
+function UnpaidAlertIcon({
+  hovered,
+  onHoverIn,
+  onHoverOut,
+}: {
+  hovered: boolean;
+  onHoverIn: () => void;
+  onHoverOut: () => void;
+}) {
+  const webHoverProps = Platform.OS === 'web'
+    ? { onMouseEnter: onHoverIn, onMouseLeave: onHoverOut } as Record<string, unknown>
+    : {};
+  return (
+    <View style={s.unpaidAlertIconWrap} {...webHoverProps}>
+      {Platform.OS === 'web' && hovered && (
+        <View style={s.unpaidAlertTooltip}>
+          <Text style={s.unpaidAlertTooltipText}>Nezaplaceno</Text>
+        </View>
+      )}
+      <Ionicons name="alert-circle" size={24} color="#EF4444" />
+    </View>
   );
 }
 
@@ -1592,57 +1629,53 @@ function BookingDetailModal({ booking, court, maxBookingDaysAhead, closingSlot, 
               )}
             </View>
 
-            {/* Změna platebního stavu / proběhlá rezervace */}
+            {/* Platební stav — u proběhlých lze měnit jen platbu */}
+            <Text style={s.detailSectionLabel}>PLATEBNÍ STAV</Text>
+            <View style={s.detailPayRow}>
+              {(Object.keys(PAYMENT_BG) as (keyof typeof PAYMENT_BG)[]).map(k => (
+                <TouchableOpacity
+                  key={k}
+                  onPress={() => onUpdatePayment(k as PaymentStatus)}
+                  style={[
+                    s.detailPayChip,
+                    { borderColor: PAYMENT_BG[k] },
+                    booking.payment_status === k && { backgroundColor: PAYMENT_BG[k] },
+                  ]}
+                >
+                  <Text style={[
+                    s.detailPayChipText,
+                    booking.payment_status === k ? { color: '#fff' } : { color: PAYMENT_BG[k] },
+                  ]}>
+                    {PAYMENT_LABEL[k]}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
             {isPast ? (
               <View style={s.detailPastNotice}>
                 <Ionicons name="lock-closed-outline" size={16} color={colors.textMuted} />
                 <Text style={s.detailPastNoticeText}>
-                  Proběhlá rezervace — nelze měnit ani zrušit
+                  Proběhlá rezervace — lze upravit jen platební stav
                 </Text>
               </View>
+            ) : !confirmCancel ? (
+              <TouchableOpacity onPress={() => setConfirmCancel(true)} style={s.detailCancelBtn}>
+                <Ionicons name="trash-outline" size={16} color={colors.error} />
+                <Text style={s.detailCancelText}>Zrušit rezervaci</Text>
+              </TouchableOpacity>
             ) : (
-              <>
-                <Text style={s.detailSectionLabel}>PLATEBNÍ STAV</Text>
-                <View style={s.detailPayRow}>
-                  {(Object.keys(PAYMENT_BG) as (keyof typeof PAYMENT_BG)[]).map(k => (
-                    <TouchableOpacity
-                      key={k}
-                      onPress={() => onUpdatePayment(k as PaymentStatus)}
-                      style={[
-                        s.detailPayChip,
-                        { borderColor: PAYMENT_BG[k] },
-                        booking.payment_status === k && { backgroundColor: PAYMENT_BG[k] },
-                      ]}
-                    >
-                      <Text style={[
-                        s.detailPayChipText,
-                        booking.payment_status === k ? { color: '#fff' } : { color: PAYMENT_BG[k] },
-                      ]}>
-                        {PAYMENT_LABEL[k]}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-
-                {!confirmCancel ? (
-                  <TouchableOpacity onPress={() => setConfirmCancel(true)} style={s.detailCancelBtn}>
-                    <Ionicons name="trash-outline" size={16} color={colors.error} />
-                    <Text style={s.detailCancelText}>Zrušit rezervaci</Text>
+              <View style={s.detailConfirmCancel}>
+                <Text style={s.detailConfirmText}>Opravdu zrušit rezervaci?</Text>
+                <View style={s.detailConfirmBtns}>
+                  <TouchableOpacity onPress={() => setConfirmCancel(false)} style={s.detailConfirmNo}>
+                    <Text style={s.detailConfirmNoText}>Ne</Text>
                   </TouchableOpacity>
-                ) : (
-                  <View style={s.detailConfirmCancel}>
-                    <Text style={s.detailConfirmText}>Opravdu zrušit rezervaci?</Text>
-                    <View style={s.detailConfirmBtns}>
-                      <TouchableOpacity onPress={() => setConfirmCancel(false)} style={s.detailConfirmNo}>
-                        <Text style={s.detailConfirmNoText}>Ne</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity onPress={onCancel} style={s.detailConfirmYes}>
-                        <Text style={s.detailConfirmYesText}>ANO, ZRUŠIT</Text>
-                      </TouchableOpacity>
-                    </View>
-                  </View>
-                )}
-              </>
+                  <TouchableOpacity onPress={onCancel} style={s.detailConfirmYes}>
+                    <Text style={s.detailConfirmYesText}>ANO, ZRUŠIT</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
             )}
             <View style={{ height: 24 }} />
           </ScrollView>
@@ -2048,10 +2081,44 @@ const s = StyleSheet.create({
   dropTarget:   { position: 'absolute', backgroundColor: 'rgba(99,102,241,0.12)', borderWidth: 2, borderColor: 'rgba(99,102,241,0.4)', borderStyle: 'dashed' },
 
   // Rezervační blok
-  bookingBlock: { position: 'absolute', overflow: 'hidden' },
-  bookingInner: { flex: 1, paddingHorizontal: 6, paddingVertical: 5, justifyContent: 'center' },
+  bookingBlock: { position: 'absolute', overflow: 'visible' },
+  bookingInner: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 6,
+    paddingVertical: 5,
+  },
+  bookingTextCol: { minWidth: 0 },
   bookingName:  { fontSize: 11, fontWeight: '800', color: '#fff', lineHeight: 15 },
   bookingMeta:  { fontSize: 9,  color: 'rgba(255,255,255,0.85)', marginTop: 1 },
+  unpaidAlertIconWrap: {
+    position: 'relative',
+    flexShrink: 0,
+    marginLeft: 4,
+    alignItems: 'center',
+    ...(Platform.OS === 'web' ? { cursor: 'default' as const } : {}),
+  },
+  unpaidAlertTooltip: {
+    position: 'absolute',
+    bottom: '100%',
+    marginBottom: 6,
+    backgroundColor: '#1C1C1E',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+    minWidth: 80,
+    alignItems: 'center',
+    zIndex: 20,
+  },
+  unpaidAlertTooltipText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#fff',
+    whiteSpace: 'nowrap',
+  },
   noteIconBtn:  { position: 'absolute', top: 3, right: 3, zIndex: 10 },
 
   // Linka aktuálního času
