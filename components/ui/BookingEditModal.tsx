@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '@/lib/theme';
+import { useClubSettings } from '@/hooks/useClubSettings';
 import {
   MOCK_COURTS,
   ALL_SLOTS, slotToTime, slotEndTime, slotDuration, slotPrice,
@@ -54,6 +55,10 @@ export function BookingEditModal({
   booking, visible, onClose,
   onCancel, onEdit, getBookedSlotsExcluding,
 }: Props) {
+  const clubSettings = useClubSettings();
+  const minBookingDurationMinutes = clubSettings.minBookingDurationMinutes;
+  const minSlotCount = minBookingDurationMinutes / 30;
+
   const [view, setView]               = useState<ModalView>('options');
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
   const [selectedSlots, setSelectedSlots] = useState<number[]>([]);
@@ -88,6 +93,7 @@ export function BookingEditModal({
 
   function handleSaveTime() {
     if (selectedSlots.length === 0) return;
+    if (selectedSlots.length * 30 < minBookingDurationMinutes) return;
     const dateKey = selectedDate.toISOString().slice(0, 10);
     onEdit(booking!.id, {
       date:  dateKey,
@@ -108,6 +114,7 @@ export function BookingEditModal({
 
   function handleSaveCourt() {
     if (!selectedCourt || selectedSlots.length === 0) return;
+    if (selectedSlots.length * 30 < minBookingDurationMinutes) return;
     const dateKey = selectedDate.toISOString().slice(0, 10);
     onEdit(booking!.id, {
       courtId:    selectedCourt.id,
@@ -136,8 +143,14 @@ export function BookingEditModal({
     if (slots.length === 0) { setSlots([idx]); return; }
     const selMin = Math.min(...slots);
     const selMax = Math.max(...slots);
-    if (idx === selMin && slots.length > 1) { setSlots(slots.filter(s => s !== selMin)); return; }
-    if (idx === selMax)                     { setSlots(slots.filter(s => s !== selMax)); return; }
+    if (idx === selMin && slots.length > 1) {
+      if (slots.length - 1 >= minSlotCount) { setSlots(slots.filter(s => s !== selMin)); return; }
+      return;
+    }
+    if (idx === selMax && slots.length > 1) {
+      if (slots.length - 1 >= minSlotCount) { setSlots(slots.filter(s => s !== selMax)); return; }
+      return;
+    }
     if (idx === selMax + 1 && !bookedNow.includes(idx)) { setSlots([...slots, idx]); return; }
     if (idx === selMin - 1 && !bookedNow.includes(idx)) { setSlots([idx, ...slots]); return; }
     setSlots([idx]);
@@ -191,6 +204,7 @@ export function BookingEditModal({
             <TimeEditView
               booking={booking}
               accent={accent}
+              minBookingDurationMinutes={minBookingDurationMinutes}
               selectedDate={selectedDate}
               selectedSlots={selectedSlots}
               bookedSlots={getBookedSlotsExcluding(
@@ -226,6 +240,7 @@ export function BookingEditModal({
           {view === 'court_slots' && selectedCourt && (
             <CourtSlotsView
               court={selectedCourt}
+              minBookingDurationMinutes={minBookingDurationMinutes}
               selectedDate={selectedDate}
               selectedSlots={selectedSlots}
               bookedSlots={getBookedSlotsExcluding(
@@ -395,9 +410,10 @@ function CancelConfirmView({ booking, accent, onConfirm, onBack }: {
 
 // ─── TIME EDIT ────────────────────────────────────────────────────────────────
 
-function TimeEditView({ booking, accent, selectedDate, selectedSlots, bookedSlots,
+function TimeEditView({ booking, accent, minBookingDurationMinutes, selectedDate, selectedSlots, bookedSlots,
   onSelectDate, onSlotPress, onSave, onBack }: {
   booking: BookingWithCourt; accent: string;
+  minBookingDurationMinutes: number;
   selectedDate: Date; selectedSlots: number[]; bookedSlots: number[];
   onSelectDate: (d: Date) => void;
   onSlotPress: (idx: number, booked: number[]) => void;
@@ -417,6 +433,7 @@ function TimeEditView({ booking, accent, selectedDate, selectedSlots, bookedSlot
 
       <SlotPicker
         accent={accent}
+        minBookingDurationMinutes={minBookingDurationMinutes}
         selectedDate={selectedDate}
         selectedSlots={selectedSlots}
         bookedSlots={bookedSlots}
@@ -471,9 +488,10 @@ function CourtPickView({ clubId, currentCourtId, onSelect, onBack }: {
 
 // ─── COURT SLOTS ─────────────────────────────────────────────────────────────
 
-function CourtSlotsView({ court, selectedDate, selectedSlots, bookedSlots,
+function CourtSlotsView({ court, minBookingDurationMinutes, selectedDate, selectedSlots, bookedSlots,
   onSelectDate, onSlotPress, onSave, onBack }: {
-  court: CourtWithClub; selectedDate: Date; selectedSlots: number[]; bookedSlots: number[];
+  court: CourtWithClub; minBookingDurationMinutes: number;
+  selectedDate: Date; selectedSlots: number[]; bookedSlots: number[];
   onSelectDate: (d: Date) => void;
   onSlotPress: (idx: number, booked: number[]) => void;
   onSave: () => void; onBack: () => void;
@@ -491,6 +509,7 @@ function CourtSlotsView({ court, selectedDate, selectedSlots, bookedSlots,
       </View>
       <SlotPicker
         accent={accent}
+        minBookingDurationMinutes={minBookingDurationMinutes}
         selectedDate={selectedDate}
         selectedSlots={selectedSlots}
         bookedSlots={bookedSlots}
@@ -506,9 +525,10 @@ function CourtSlotsView({ court, selectedDate, selectedSlots, bookedSlots,
 
 // ─── SHARED: SLOT PICKER ─────────────────────────────────────────────────────
 
-function SlotPicker({ accent, selectedDate, selectedSlots, bookedSlots,
+function SlotPicker({ accent, minBookingDurationMinutes, selectedDate, selectedSlots, bookedSlots,
   onSelectDate, onSlotPress, pricePerHour, onConfirm, confirmLabel }: {
-  accent: string; selectedDate: Date; selectedSlots: number[]; bookedSlots: number[];
+  accent: string; minBookingDurationMinutes: number;
+  selectedDate: Date; selectedSlots: number[]; bookedSlots: number[];
   onSelectDate: (d: Date) => void;
   onSlotPress: (idx: number, booked: number[]) => void;
   pricePerHour: number; onConfirm: () => void; confirmLabel: string;
@@ -517,6 +537,8 @@ function SlotPicker({ accent, selectedDate, selectedSlots, bookedSlots,
   const dateKey = selectedDate.toISOString().slice(0, 10);
   const selMin  = selectedSlots.length > 0 ? Math.min(...selectedSlots) : -1;
   const selMax  = selectedSlots.length > 0 ? Math.max(...selectedSlots) : -1;
+  const durationMinutes = selectedSlots.length * 30;
+  const belowMin = selectedSlots.length > 0 && durationMinutes < minBookingDurationMinutes;
 
   return (
     <ScrollView showsVerticalScrollIndicator={false}>
@@ -544,6 +566,7 @@ function SlotPicker({ accent, selectedDate, selectedSlots, bookedSlots,
 
       {/* Sloty */}
       <Text style={s.sectionLabel}>VOLNÉ TERMÍNY</Text>
+      <Text style={s.minDurationHint}>Minimální doba: {minBookingDurationMinutes} min</Text>
       <View style={s.slotGrid}>
         {ALL_SLOTS.map(idx => {
           const isBooked   = bookedSlots.includes(idx);
@@ -581,10 +604,18 @@ function SlotPicker({ accent, selectedDate, selectedSlots, bookedSlots,
               value={`${slotPrice(selectedSlots.length, pricePerHour)} Kč`}
               accent={accent} />
           </View>
-          <TouchableOpacity onPress={onConfirm} activeOpacity={0.88}
-            style={[s.confirmBtn, { backgroundColor: accent }]}>
+          <TouchableOpacity
+            onPress={onConfirm}
+            disabled={belowMin}
+            activeOpacity={0.88}
+            style={[s.confirmBtn, { backgroundColor: accent }, belowMin && { opacity: 0.45 }]}>
             <Text style={s.confirmBtnText}>{confirmLabel}</Text>
           </TouchableOpacity>
+          {belowMin && (
+            <Text style={s.minDurationError}>
+              Vyberte alespoň {minBookingDurationMinutes} min ({slotDuration(minBookingDurationMinutes / 30)}).
+            </Text>
+          )}
         </View>
       )}
       <View style={{ height: 24 }} />
@@ -700,6 +731,13 @@ const s = StyleSheet.create({
   sectionLabel: {
     fontSize: 10, fontWeight: '900', color: colors.textMuted, letterSpacing: 1.5,
     paddingHorizontal: 16, paddingTop: 16, paddingBottom: 8,
+  },
+  minDurationHint: {
+    fontSize: 12, color: colors.textMuted,
+    paddingHorizontal: 16, paddingBottom: 8,
+  },
+  minDurationError: {
+    fontSize: 12, color: colors.error, textAlign: 'center',
   },
   dayRow: { paddingHorizontal: 14, paddingBottom: 4, gap: 8 },
   dayChip: {

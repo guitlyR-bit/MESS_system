@@ -2,26 +2,28 @@
  * Správce klubu — přehled rezervací, správa kurtů, nastavení
  *
  * Tab PŘEHLED  — časová osa všech kurtů; přetažením slot přesunete rezervaci
- * Tab KURTY    — editace detailů kurtů (povrch, hala/venku, cena, …)
- * Tab NASTAVENÍ — editační zámek, provozní doba
+ * Tab KURTY    — kategorie kurtů, přiřazení, editace detailů kurtů
+ * Tab NASTAVENÍ — provozní doba, ceník a uzavření per kategorie (+ globální fallback)
  */
 
 import React, { useState, useRef, useCallback, useMemo, useEffect } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, TouchableWithoutFeedback,
-  StyleSheet, PanResponder, Modal, TextInput, Switch, Animated, Platform,
+  StyleSheet, PanResponder, Modal, TextInput, Switch, Animated, Platform, Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import DraggableFlatList, { ScaleDecorator, type RenderItemParams } from 'react-native-draggable-flatlist';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '@/lib/theme';
-import { useClubBookings } from '@/hooks/useClubBookings';
+import { useClubBookings, snapshotBookingPosition, type OriginalBookingPosition } from '@/hooks/useClubBookings';
 import {
   ALL_SLOTS, slotToTime, slotEndTime, slotPrice, fmtDay, localDateKey,
   SPORT_LABELS, SURFACE_LABELS, SLOT_COUNT, SLOT_START_HOUR,
   MOCK_REGISTERED_PLAYERS, registeredPlayerFullName, slotDuration,
 } from '@/lib/mockData';
 import type { RegisteredPlayer } from '@/lib/mockData';
-import type { ClubBooking, CourtWithClub, CourtSurface, SportType, PaymentStatus, ClubClosurePeriod, ClubSettings } from '@/types/database';
+import type { ClubBooking, CourtWithClub, CourtSurface, SportType, PaymentStatus, ClubClosurePeriod, ClubSettings, DayHoursPartialOverride, CourtCategory } from '@/types/database';
 import {
   getEffectiveClosingSlot,
   getOpeningSlotForDate,
@@ -30,13 +32,35 @@ import {
   getClosureTitleForDate,
   isSlotBookableForCourt,
   getEffectiveClosingSlotForCourt,
+  isCourtDateFullyClosed,
   fmtDateKey,
+  getCourtClosurePeriods,
+  findCourtPartialClosuresForDate,
+  formatCourtClosureType,
   canApplyEarlyClose,
   formatEarlyCloseConflict,
   findValidEarlyCloseSlot,
   defaultEarlyCloseSlot,
 } from '@/lib/clubClosure';
-import { formatDayHours, calculateSlotsPrice, getDayHoursForDate, getDayHoursForCourt } from '@/lib/clubSchedule';
+import { formatDayHours, calculateSlotsPrice, getDayHoursForDate, getDayHoursForCourt, hasDayHoursOverride, hasCategoryDayHoursOverride, getBookingConflictsForClearingDayOverride, formatBookingConflictMessage } from '@/lib/clubSchedule';
+import {
+  formatSeasonDates,
+  resolveCategoryColorHex,
+  defaultCategoryColor,
+  getCategoryForCourt,
+  filterCourtsByActiveSeason,
+  getActiveCalendarSeason,
+  getUncategorizedCourts,
+  getCategoryById,
+  courtsInCategory,
+  getCategorySeasonLabel,
+  filterCategoriesBySeason,
+  getCategoryOpeningSchedule,
+  isCourtClosedByCalendarSeason,
+  isSeasonClosed,
+  getSeasonById,
+  findFutureBookingsForClosedSeason,
+} from '@/lib/clubCategories';
 import {
   getCzechHoliday, getCzechHolidaysInRange, holidayTreatmentLabel,
 } from '@/lib/czechHolidays';
@@ -47,8 +71,10 @@ import {
 } from '@/lib/clubSeason';
 import { OpeningHoursModal } from '@/components/club/OpeningHoursModal';
 import { CourtPricingModal } from '@/components/club/CourtPricingModal';
-import { CourtSeasonModal } from '@/components/club/CourtSeasonModal';
 import { SeasonPeriodEditor } from '@/components/club/SeasonPeriodEditor';
+import { ClosureExceptionModal } from '@/components/club/ClosureExceptionModal';
+import { DayHoursOverrideModal } from '@/components/club/DayHoursOverrideModal';
+import { CourtCategoryEditModal } from '@/components/club/CourtCategoryEditModal';
 
 /** Konec vizuálního bloku na časové ose (stejná geometrie jako render) */
 function bookingDisplayEndMinutes(booking: ClubBooking): number {
@@ -91,6 +117,29 @@ function isSlotOpenForNewBooking(
   if (viewedDateKey !== todayKey) return true;
   const slotEndMinutes = SLOT_START_HOUR * 60 + (slotIdx + 1) * 30;
   return slotEndMinutes > nowMinutes;
+}
+
+/** Zda se aktuální pozice liší od uložené pro undo */
+function bookingPositionDiffers(
+  booking: ClubBooking,
+  original: OriginalBookingPosition,
+): boolean {
+  if (booking.court_id !== original.court_id || booking.date !== original.date) return true;
+  if (booking.slots.length !== original.slots.length) return true;
+  return booking.slots.some((s, i) => s !== original.slots[i]);
+}
+
+/** Popis původní pozice pro undo tlačítko */
+function formatOriginalPosition(
+  original: OriginalBookingPosition,
+  courts: CourtWithClub[],
+): string {
+  const court = courts.find(c => c.id === original.court_id);
+  const slotMin = Math.min(...original.slots);
+  const slotMax = Math.max(...original.slots);
+  const dateObj = new Date(original.date + 'T12:00:00');
+  const fmt = fmtDay(dateObj);
+  return `${fmt.short} ${fmt.num}. ${fmt.month} · ${court?.name ?? original.court_id} · ${slotToTime(slotMin)}–${slotEndTime(slotMax)}`;
 }
 
 // ─── Konstanty časové osy ─────────────────────────────────────────────────────
@@ -172,7 +221,8 @@ export default function ClubCourtsScreen() {
   const hook = useClubBookings();
 
   return (
-    <SafeAreaView style={s.safe} edges={['bottom']}>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <SafeAreaView style={s.safe} edges={['bottom']}>
       {/* Tab bar */}
       <View style={s.tabs}>
         {(['timeline', 'courts', 'settings'] as const).map(t => (
@@ -188,7 +238,8 @@ export default function ClubCourtsScreen() {
       {tab === 'timeline'  && <TimelineTab  hook={hook} />}
       {tab === 'courts'    && <CourtsTab    hook={hook} />}
       {tab === 'settings'  && <SettingsTab  hook={hook} />}
-    </SafeAreaView>
+      </SafeAreaView>
+    </GestureHandlerRootView>
   );
 }
 
@@ -219,7 +270,10 @@ function ClosedZoneOverlay({
 }
 
 function TimelineTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
-  const { courts, bookings, getBookingsForDate, moveBooking, updateBooking, createBooking, changeBookingDate, changeBookingDuration, settings } = hook;
+  const {
+    courts, bookings, getBookingsForDate, moveBooking, revertBookingMove, updateBooking, createBooking,
+    changeBookingDate, changeBookingDuration, settings,
+  } = hook;
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [selectedBooking, setSelectedBooking] = useState<ClubBooking | null>(null);
   const [createDraft, setCreateDraft] = useState<{ courtId: string; slotIdx: number } | null>(null);
@@ -228,6 +282,29 @@ function TimelineTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
   const [calendarVisible, setCalendarVisible] = useState(false);
   const [noteTooltip, setNoteTooltip] = useState<string | null>(null);
   const [hoveredUnpaidAlertId, setHoveredUnpaidAlertId] = useState<string | null>(null);
+  const [pendingUndo, setPendingUndo] = useState<Record<string, OriginalBookingPosition>>({});
+  const [revertError, setRevertError] = useState<string | null>(null);
+
+  const bookingsRef = useRef(bookings);
+  bookingsRef.current = bookings;
+
+  const capturePositionUndo = useCallback((bookingId: string) => {
+    const b = bookingsRef.current.find(x => x.id === bookingId);
+    if (!b) return;
+    setPendingUndo(prev => ({
+      ...prev,
+      [bookingId]: snapshotBookingPosition(b),
+    }));
+  }, []);
+
+  const clearPositionUndo = useCallback((bookingId: string) => {
+    setPendingUndo(prev => {
+      if (!prev[bookingId]) return prev;
+      const next = { ...prev };
+      delete next[bookingId];
+      return next;
+    });
+  }, []);
 
   // Aktuální čas — aktualizuje se každou minutu (pro linku a zešednutí)
   const [now, setNow] = useState(() => new Date());
@@ -239,6 +316,34 @@ function TimelineTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
   const todayKey = localDateKey(now);
   const days     = useMemo(() => getWeekDays(weekOffset), [weekOffset]);
   const dateKey  = localDateKey(selectedDate);
+
+  const visibleCourts = useMemo(
+    () => filterCourtsByActiveSeason(courts, settings, dateKey),
+    [courts, settings, dateKey],
+  );
+  const activeCalendarSeason = useMemo(
+    () => getActiveCalendarSeason(settings.seasons ?? [], dateKey),
+    [settings.seasons, dateKey],
+  );
+
+  const handleRevertFromGrid = useCallback((
+    bookingId: string,
+    origin: OriginalBookingPosition,
+  ) => {
+    setRevertError(null);
+    const result = revertBookingMove(bookingId, origin);
+    if (result.ok) {
+      clearPositionUndo(bookingId);
+      if (result.booking.date !== dateKey) {
+        const [y, m, d] = result.booking.date.split('-').map(Number);
+        const picked = new Date(y, m - 1, d, 12, 0, 0);
+        setSelectedDate(picked);
+        setWeekOffset(getWeekOffsetForDate(picked));
+      }
+    } else {
+      Alert.alert('Nelze vrátit', result.error);
+    }
+  }, [revertBookingMove, clearPositionUndo, dateKey]);
 
   const handlePrevWeek = useCallback(() => {
     const newOffset = weekOffset - 1;
@@ -281,6 +386,11 @@ function TimelineTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
   const openingSlotForDay = getOpeningSlotForDate(dateKey, dateSettings);
   const dayHours = getDayHoursForDate(dateKey, dateSettings);
   const dayClosingSlot = dayHours.closingSlot;
+  const dayHasHoursOverride = hasDayHoursOverride(dateKey, dateSettings);
+  const dayOverrideKeys = useMemo(
+    () => Object.keys(settings.dayOverrides ?? {}),
+    [settings.dayOverrides],
+  );
   const dateFullyClosed = isDateFullyClosed(dateKey, dateSettings);
   const earlyCloseToday = dateKey === todayKey && dateSettings.earlyCloseEnabled;
   const showEarlyCloseZone = earlyCloseToday
@@ -297,12 +407,12 @@ function TimelineTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
   // Mapa obsazených slotů per kurt — pro vykreslení volných buněk
   const occupiedByCourt = useMemo(() => {
     const map: Record<string, Set<number>> = {};
-    courts.forEach(c => { map[c.id] = new Set(); });
+    visibleCourts.forEach(c => { map[c.id] = new Set(); });
     dayBooks.forEach(b => {
       b.slots.forEach(s => map[b.court_id]?.add(s));
     });
     return map;
-  }, [dayBooks, courts]);
+  }, [dayBooks, visibleCourts]);
 
   // Sloty viditelné — při předčasném uzavření zobrazíme i uzavřenou zónu
   const visibleEndSlot = showEarlyCloseZone
@@ -328,7 +438,7 @@ function TimelineTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
     slotMin: number; slotCount: number; courtId: string; courtIdx: number;
   }>>({});
   dayBooks.forEach(b => {
-    const cIdx = courts.findIndex(c => c.id === b.court_id);
+    const cIdx = visibleCourts.findIndex(c => c.id === b.court_id);
     bookingInfoRef.current[b.id] = {
       slotMin:   Math.min(...b.slots),
       slotCount: b.slots.length,
@@ -383,8 +493,8 @@ function TimelineTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
             const slotDelta   = Math.round(gs.dx / SLOT_W);
             const newStart    = Math.max(0, Math.min(SLOT_COUNT - info.slotCount, info.slotMin + slotDelta));
             const rowDelta    = Math.round(gs.dy / ROW_H);
-            const newCourtIdx = Math.max(0, Math.min(courts.length - 1, info.courtIdx + rowDelta));
-            const newCourtId  = courts[newCourtIdx]?.id ?? info.courtId;
+            const newCourtIdx = Math.max(0, Math.min(visibleCourts.length - 1, info.courtIdx + rowDelta));
+            const newCourtId  = visibleCourts[newCourtIdx]?.id ?? info.courtId;
             const newSlots    = Array.from({ length: info.slotCount }, (_, i) => newStart + i);
             // Použijeme ref pro čerstvá data — zamezí stale closure
             const others   = dayBooksRef.current.filter(b => b.id !== booking.id && b.court_id === newCourtId);
@@ -395,7 +505,19 @@ function TimelineTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
                 s, newCourtId, dateKey, settings, nowMinutes,
               ));
             // Při konfliktu, v minulosti nebo v uzavřeném čase se neprovede žádná akce
-            if (!conflict && !inPast && !inClosed) moveBookingRef.current(booking.id, newStart, newCourtId);
+            if (!conflict && !inPast && !inClosed) {
+              const moved = newStart !== info.slotMin || newCourtId !== info.courtId;
+              if (moved) {
+                const fresh = bookingsRef.current.find(b => b.id === booking.id);
+                if (fresh) {
+                  setPendingUndo(prev => ({
+                    ...prev,
+                    [booking.id]: snapshotBookingPosition(fresh),
+                  }));
+                }
+                moveBookingRef.current(booking.id, newStart, newCourtId);
+              }
+            }
           }
           setDraggingId(null);
           setDragOffsetX(0);
@@ -413,10 +535,10 @@ function TimelineTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
     });
     return map;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bookingIds, courts, dateKey, todayKey, nowMinutes, dateFullyClosed, settings]);
+  }, [bookingIds, visibleCourts, dateKey, todayKey, nowMinutes, dateFullyClosed, settings]);
 
   const timelineWidth = visibleSlots.length * SLOT_W;
-  const timelineH = HEADER_H + courts.length * ROW_H + SCROLLBAR_H;
+  const timelineH = HEADER_H + visibleCourts.length * ROW_H + SCROLLBAR_H;
 
   // Pozice linky aktuálního času (px od začátku viditelné oblasti)
   const openingMinutes = SLOT_START_HOUR * 60 + openingSlotForDay * 30;
@@ -470,6 +592,7 @@ function TimelineTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
             const isSel  = dayKey === dateKey;
             const isToday = dayKey === todayKey;
             const isHoliday = weekHolidayKeys.includes(dayKey);
+            const hasOverride = dayOverrideKeys.includes(dayKey);
             return (
               <TouchableOpacity key={i} onPress={() => setSelectedDate(day)}
                 style={[s.dayChip, isSel && s.dayChipActive, isHoliday && !isSel && s.dayChipHoliday]}>
@@ -482,6 +605,9 @@ function TimelineTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
                 </Text>
                 {isHoliday && (
                   <View style={[s.holidayDot, isSel && { backgroundColor: '#fff' }]} />
+                )}
+                {hasOverride && (
+                  <View style={[s.overrideDot, isSel && s.overrideDotActive]} />
                 )}
               </TouchableOpacity>
             );
@@ -498,6 +624,23 @@ function TimelineTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
           </TouchableOpacity>
         )}
       </View>
+
+      {/* Provozní doba vybraného dne */}
+      {!dateFullyClosed && (
+        <View style={s.dayHoursBar}>
+          <View style={s.dayHoursInfo}>
+            <Ionicons name="time-outline" size={15} color={dayHasHoursOverride ? W.orange : colors.textMuted} />
+            <Text style={[s.dayHoursText, dayHasHoursOverride && { color: W.orange }]}>
+              {formatDayHours(dayHours)}
+            </Text>
+            {dayHasHoursOverride && (
+              <View style={s.dayHoursBadge}>
+                <Text style={s.dayHoursBadgeText}>ÚPRAVA</Text>
+              </View>
+            )}
+          </View>
+        </View>
+      )}
 
       {/* Legenda platebního stavu */}
       <View style={s.legend}>
@@ -538,20 +681,52 @@ function TimelineTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
         </View>
       )}
 
+      {settings.seasonalModeEnabled && activeCalendarSeason?.is_closed && (
+        <View style={s.seasonClosedBanner}>
+          <Ionicons name="lock-closed" size={18} color={W.red} />
+          <View style={{ flex: 1, gap: 2 }}>
+            <Text style={s.seasonClosedBannerTitle}>Sezóna je uzavřena</Text>
+            <Text style={s.seasonClosedBannerText}>
+              {activeCalendarSeason.name} ({formatSeasonDates(activeCalendarSeason)}) — rezervace na kurty této sezóny nejsou k dispozici.
+            </Text>
+          </View>
+        </View>
+      )}
+
+      {settings.seasonalModeEnabled && visibleCourts.length === 0 && courts.length > 0 && !activeCalendarSeason?.is_closed && (
+        <View style={s.seasonFilterBanner}>
+          <Ionicons name="calendar-outline" size={18} color={W.amber} />
+          <View style={{ flex: 1, gap: 2 }}>
+            <Text style={s.seasonFilterBannerTitle}>Žádné kurty pro aktivní sezónu</Text>
+            <Text style={s.seasonFilterBannerText}>
+              {activeCalendarSeason
+                ? `Pro ${fmtDateKey(dateKey)} platí „${activeCalendarSeason.name}" — v mřížce jsou jen kurty z kategorií této sezóny.`
+                : 'Pro tento den není definovaná kalendářní sezóna — kurty bez sezóny se nezobrazují.'}
+            </Text>
+          </View>
+        </View>
+      )}
+
       {/* Časová osa */}
       <View style={[s.timelineWrapper, { height: timelineH }]}>
 
         {/* Pevný levý sloupec — názvy kurtů */}
         <View style={s.courtNamesCol}>
           <View style={[s.cornerCell]} />
-          {courts.map(court => {
-            const accent = SPORT_COLORS[court.sport] ?? W.orange;
+          {visibleCourts.map(court => {
+            const cat = getCategoryForCourt(court.id, settings);
+            const accent = cat
+              ? resolveCategoryColorHex(cat.color)
+              : (SPORT_COLORS[court.sport] ?? W.orange);
             return (
               <View key={court.id} style={[s.courtNameCell, { borderLeftColor: accent }]}>
-                <Text numberOfLines={1} style={s.courtNameText}>{court.name}</Text>
-                <Text numberOfLines={1} style={s.courtSportText}>
-                  {SPORT_LABELS[court.sport]}
-                </Text>
+                <View style={[s.courtCategoryDot, { backgroundColor: accent }]} />
+                <View style={{ flex: 1, minWidth: 0 }}>
+                  <Text numberOfLines={1} style={s.courtNameText}>{court.name}</Text>
+                  <Text numberOfLines={1} style={s.courtSportText}>
+                    {SPORT_LABELS[court.sport]}
+                  </Text>
+                </View>
               </View>
             );
           })}
@@ -581,7 +756,7 @@ function TimelineTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
             horizontal
             ref={contentScrollRef}
             scrollEnabled={scrollEnabled}
-            style={{ height: courts.length * ROW_H + SCROLLBAR_H }}
+            style={{ height: visibleCourts.length * ROW_H + SCROLLBAR_H }}
             showsHorizontalScrollIndicator
             onScroll={e => {
               const x = e.nativeEvent.contentOffset.x;
@@ -590,10 +765,10 @@ function TimelineTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
             }}
             scrollEventThrottle={16}
           >
-            <View style={{ width: timelineWidth, height: courts.length * ROW_H, position: 'relative' }}>
+            <View style={{ width: timelineWidth, height: visibleCourts.length * ROW_H, position: 'relative' }}>
 
               {/* Pozadí řad kurtů — střídavé pruhy */}
-              {courts.map((_, i) => (
+              {visibleCourts.map((_, i) => (
                 <View key={`bg-${i}`} style={{
                   position: 'absolute', top: i * ROW_H, left: 0, right: 0, height: ROW_H,
                   backgroundColor: i % 2 === 0 ? colors.surface : colors.bgAlt,
@@ -606,7 +781,7 @@ function TimelineTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
               ))}
 
               {/* Pozadí mřížky — vodorovné čáry (kurty) */}
-              {courts.map((_, i) => (
+              {visibleCourts.map((_, i) => (
                 <View key={i} style={[s.gridHLine, { top: (i + 1) * ROW_H - 1 }]} />
               ))}
 
@@ -614,7 +789,7 @@ function TimelineTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
               {showNowLine && nowLineX > 0 && (
                 <View style={{
                   position: 'absolute', top: 0, left: 0, width: nowLineX,
-                  height: courts.length * ROW_H, backgroundColor: 'rgba(0,0,0,0.05)', zIndex: 0,
+                  height: visibleCourts.length * ROW_H, backgroundColor: 'rgba(0,0,0,0.05)', zIndex: 0,
                 }} />
               )}
 
@@ -624,19 +799,19 @@ function TimelineTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
                 if (!info) return null;
                 const rowDelta    = Math.round(dragOffsetY / ROW_H);
                 const slotDelta   = Math.round(dragOffsetX / SLOT_W);
-                const targetRow   = Math.max(0, Math.min(courts.length - 1, info.courtIdx + rowDelta));
+                const targetRow   = Math.max(0, Math.min(visibleCourts.length - 1, info.courtIdx + rowDelta));
                 const targetSlot  = Math.max(0, Math.min(SLOT_COUNT - info.slotCount, info.slotMin + slotDelta));
                 const posInVis    = targetSlot - openingSlotForDay;
                 // Barva dle konfliktu
                 const othersOnTarget = dayBooks.filter(b =>
-                  b.id !== draggingId && b.court_id === courts[targetRow]?.id
+                  b.id !== draggingId && b.court_id === visibleCourts[targetRow]?.id
                 );
                 const newSlots = Array.from({ length: info.slotCount }, (_, i) => targetSlot + i);
                 const hasConflict = newSlots.some(s => othersOnTarget.some(ob => ob.slots.includes(s)));
                 const inPast = isSlotStartInPastOnToday(targetSlot, dateKey, todayKey, nowMinutes);
                 const inClosed = dateFullyClosed
                   || newSlots.some(s => !isSlotBookableForCourt(
-                    s, courts[targetRow]?.id ?? '', dateKey, settings, nowMinutes,
+                    s, visibleCourts[targetRow]?.id ?? '', dateKey, settings, nowMinutes,
                   ));
                 const isInvalid = hasConflict || inPast || inClosed;
                 return (
@@ -652,7 +827,7 @@ function TimelineTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
               })()}
 
               {/* Uzavřené zóny — červené podbarvení se slotovou mřížkou */}
-              {dateFullyClosed && courts.map((_, ci) => (
+              {dateFullyClosed && visibleCourts.map((_, ci) => (
                 <ClosedZoneOverlay
                   key={`fullclose-${ci}`}
                   left={0}
@@ -662,7 +837,30 @@ function TimelineTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
                 />
               ))}
 
-              {!dateFullyClosed && courts.map((court, ci) => {
+              {!dateFullyClosed && visibleCourts.map((court, ci) => {
+                if (isCourtDateFullyClosed(court.id, dateKey, settings)) {
+                  return (
+                    <ClosedZoneOverlay
+                      key={`catclose-${court.id}`}
+                      left={0}
+                      width={timelineWidth}
+                      height={ROW_H - 1}
+                      top={ci * ROW_H}
+                    />
+                  );
+                }
+                if (isCourtClosedByCalendarSeason(court.id, dateKey, settings)) {
+                  return (
+                    <ClosedZoneOverlay
+                      key={`cal-season-${court.id}`}
+                      left={0}
+                      width={timelineWidth}
+                      height={ROW_H - 1}
+                      top={ci * ROW_H}
+                      label="SEZÓNA UZAVŘENA"
+                    />
+                  );
+                }
                 if (isCourtSeasonallyClosed(court.id, dateKey, settings)) {
                   return (
                     <ClosedZoneOverlay
@@ -703,6 +901,16 @@ function TimelineTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
                         top={ci * ROW_H}
                       />
                     )}
+                    {findCourtPartialClosuresForDate(court.id, dateKey, settings).map(period => (
+                      <ClosedZoneOverlay
+                        key={`partial-${court.id}-${period.id}`}
+                        left={(period.closedFromSlot! - openingSlotForDay) * SLOT_W}
+                        width={(period.closedToSlot! - period.closedFromSlot! + 1) * SLOT_W}
+                        height={ROW_H - 1}
+                        top={ci * ROW_H}
+                        showLabel={false}
+                      />
+                    ))}
                     {(() => {
                       const afterCloseLeft = (courtClosing - openingSlotForDay + 1) * SLOT_W;
                       if (afterCloseLeft < timelineWidth) {
@@ -737,7 +945,7 @@ function TimelineTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
               })}
 
               {/* Volné sloty — hover + ikona pro novou rezervaci */}
-              {!dateFullyClosed && courts.map((court, ci) =>
+              {!dateFullyClosed && visibleCourts.map((court, ci) =>
                 visibleSlots
                   .filter(idx => idx <= getEffectiveClosingSlotForCourt(court.id, dateKey, settings))
                   .filter(idx => !occupiedByCourt[court.id]?.has(idx))
@@ -784,7 +992,7 @@ function TimelineTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
 
               {/* Rezervační bloky */}
               {dayBooks.map(booking => {
-                const courtIdx = courts.findIndex(c => c.id === booking.court_id);
+                const courtIdx = visibleCourts.findIndex(c => c.id === booking.court_id);
                 if (courtIdx === -1) return null;
 
                 const slotMin    = Math.min(...booking.slots);
@@ -799,6 +1007,12 @@ function TimelineTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
                 const isPast   = isBookingPast(booking, dateKey, todayKey, now);
                 const bgColor  = isPast ? PAST_BOOKING_BG : (PAYMENT_BG[booking.payment_status] ?? '#94A3B8');
                 const showUnpaidAlert = isPast && booking.payment_status === 'pending';
+                const undoOrigin = pendingUndo[booking.id];
+                const hasUndo = !isPast && undoOrigin && bookingPositionDiffers(booking, undoOrigin);
+                const showNoteIcon = !!booking.note;
+                const iconColWidth = showUnpaidAlert ? 24 : hasUndo ? 16 : showNoteIcon ? 14 : 0;
+                const hasBookingIcons = iconColWidth > 0;
+                const textPadRight = hasBookingIcons ? iconColWidth + 7 : 0;
 
                 return (
                   <View
@@ -827,11 +1041,12 @@ function TimelineTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
                           justDraggedRef.current.delete(booking.id);
                           return;
                         }
+                        setRevertError(null);
                         setSelectedBooking(booking);
                       }}
                       style={[s.bookingInner, { backgroundColor: bgColor }]}
                     >
-                      <View style={s.bookingTextCol}>
+                      <View style={[s.bookingTextCol, hasBookingIcons && { paddingRight: textPadRight }]}>
                         <Text numberOfLines={1} style={s.bookingName}>
                           {booking.player_name}
                         </Text>
@@ -840,22 +1055,45 @@ function TimelineTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
                           {slotCount >= 2 ? ` · ${booking.price} Kč` : ''}
                         </Text>
                       </View>
-                      {showUnpaidAlert && (
-                        <UnpaidAlertIcon
-                          hovered={hoveredUnpaidAlertId === booking.id}
-                          onHoverIn={() => setHoveredUnpaidAlertId(booking.id)}
-                          onHoverOut={() => setHoveredUnpaidAlertId(id => id === booking.id ? null : id)}
-                        />
-                      )}
                     </TouchableOpacity>
-                    {booking.note && (
-                      <TouchableOpacity
-                        style={s.noteIconBtn}
-                        onPress={() => setNoteTooltip(booking.note!)}
-                        hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-                      >
-                        <Ionicons name="information-circle" size={14} color="rgba(255,255,255,0.92)" />
-                      </TouchableOpacity>
+                    {hasBookingIcons && (
+                      <View style={s.bookingIconsCol} pointerEvents="box-none">
+                        {showNoteIcon && (
+                          <TouchableOpacity
+                            onPress={(e) => {
+                              if (Platform.OS === 'web') {
+                                (e as unknown as { stopPropagation?: () => void }).stopPropagation?.();
+                              }
+                              setNoteTooltip(booking.note!);
+                            }}
+                            hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                          >
+                            <Ionicons name="information-circle" size={14} color="rgba(255,255,255,0.92)" />
+                          </TouchableOpacity>
+                        )}
+                        {hasUndo && undoOrigin && (
+                          <TouchableOpacity
+                            style={s.undoHintBadge}
+                            hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                            onPress={(e) => {
+                              if (Platform.OS === 'web') {
+                                (e as unknown as { stopPropagation?: () => void }).stopPropagation?.();
+                              }
+                              handleRevertFromGrid(booking.id, undoOrigin);
+                            }}
+                            accessibilityLabel="Vrátit na původní místo"
+                          >
+                            <Ionicons name="arrow-undo" size={11} color="rgba(255,255,255,0.95)" />
+                          </TouchableOpacity>
+                        )}
+                        {showUnpaidAlert && (
+                          <UnpaidAlertIcon
+                            hovered={hoveredUnpaidAlertId === booking.id}
+                            onHoverIn={() => setHoveredUnpaidAlertId(booking.id)}
+                            onHoverOut={() => setHoveredUnpaidAlertId(id => id === booking.id ? null : id)}
+                          />
+                        )}
+                      </View>
                     )}
                   </View>
                 );
@@ -886,6 +1124,7 @@ function TimelineTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
         onSelectWeek={handleSelectWeek}
         onClose={() => setCalendarVisible(false)}
         maxBookingDaysAhead={settings.maxBookingDaysAhead}
+        dayOverrideKeys={dayOverrideKeys}
       />
 
       {/* Detail rezervace */}
@@ -894,6 +1133,7 @@ function TimelineTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
           booking={selectedBooking}
           court={courts.find(c => c.id === selectedBooking.court_id) ?? null}
           maxBookingDaysAhead={settings.maxBookingDaysAhead}
+          minBookingDurationMinutes={settings.minBookingDurationMinutes}
           closingSlot={effectiveClosingSlot}
           occupiedSlots={(() => {
             const set = new Set<number>();
@@ -907,12 +1147,45 @@ function TimelineTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
               .forEach(b => b.slots.forEach(s => set.add(s)));
             return set;
           })()}
-          onClose={() => setSelectedBooking(null)}
+          onClose={() => {
+            setRevertError(null);
+            setSelectedBooking(null);
+          }}
+          undoPosition={(() => {
+            const origin = pendingUndo[selectedBooking.id];
+            if (!origin) return null;
+            if (!bookingPositionDiffers(selectedBooking, origin)) return null;
+            return origin;
+          })()}
+          undoLabel={(() => {
+            const origin = pendingUndo[selectedBooking.id];
+            return origin ? formatOriginalPosition(origin, courts) : '';
+          })()}
+          revertError={revertError}
+          onRevert={() => {
+            const origin = pendingUndo[selectedBooking.id];
+            if (!origin) return;
+            setRevertError(null);
+            const result = revertBookingMove(selectedBooking.id, origin);
+            if (result.ok) {
+              clearPositionUndo(selectedBooking.id);
+              setSelectedBooking(result.booking);
+              if (result.booking.date !== dateKey) {
+                const [y, m, d] = result.booking.date.split('-').map(Number);
+                const picked = new Date(y, m - 1, d, 12, 0, 0);
+                setSelectedDate(picked);
+                setWeekOffset(getWeekOffsetForDate(picked));
+              }
+            } else {
+              setRevertError(result.error);
+            }
+          }}
           onUpdatePayment={(status) => {
             updateBooking(selectedBooking.id, { payment_status: status });
             setSelectedBooking(prev => prev ? { ...prev, payment_status: status } : null);
           }}
           onChangeDate={(newDate) => {
+            if (newDate !== selectedBooking.date) capturePositionUndo(selectedBooking.id);
             const result = changeBookingDate(selectedBooking.id, newDate);
             if (result.ok) {
               setSelectedBooking(result.booking);
@@ -926,6 +1199,9 @@ function TimelineTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
             return result;
           }}
           onChangeDuration={(durationMinutes) => {
+            if (durationMinutes !== selectedBooking.slots.length * 30) {
+              capturePositionUndo(selectedBooking.id);
+            }
             const result = changeBookingDuration(selectedBooking.id, durationMinutes);
             if (result.ok) setSelectedBooking(result.booking);
             return result;
@@ -941,6 +1217,7 @@ function TimelineTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
           }}
           onCancel={() => {
             updateBooking(selectedBooking.id, { status: 'cancelled' });
+            clearPositionUndo(selectedBooking.id);
             setSelectedBooking(null);
           }}
         />
@@ -1196,196 +1473,15 @@ function DayPickerModal({ visible, selectedDateKey, onSelectDate, onClose, maxBo
   );
 }
 
-// ─── Kalendářový výběr termínu uzavření (od–do) ───────────────────────────────
-
-function ClosureRangeModal({ visible, onClose, onAdd }: {
-  visible: boolean;
-  onClose: () => void;
-  onAdd: (period: Omit<ClubClosurePeriod, 'id'>) => void;
-}) {
-  const [dispMonth, setDispMonth] = useState(0);
-  const [dispYear,  setDispYear]  = useState(() => new Date().getFullYear());
-  const [draftFrom, setDraftFrom] = useState<string | null>(null);
-  const [draftTo,   setDraftTo]   = useState<string | null>(null);
-  const [note,      setNote]      = useState('');
-
-  useEffect(() => {
-    if (visible) {
-      const now = new Date();
-      setDispMonth(now.getMonth());
-      setDispYear(now.getFullYear());
-      setDraftFrom(null);
-      setDraftTo(null);
-      setNote('');
-    }
-  }, [visible]);
-
-  const rows = useMemo(() => {
-    const first = new Date(dispYear, dispMonth, 1);
-    const start = getMonday(first);
-    const all   = Array.from({ length: 42 }, (_, i) => {
-      const d = new Date(start);
-      d.setDate(d.getDate() + i);
-      return d;
-    });
-    const result: Date[][] = [];
-    for (let i = 0; i < 42; i += 7) result.push(all.slice(i, i + 7));
-    return result;
-  }, [dispYear, dispMonth]);
-
-  const goPrev = () => {
-    if (dispMonth === 0) { setDispMonth(11); setDispYear(y => y - 1); }
-    else setDispMonth(m => m - 1);
-  };
-  const goNext = () => {
-    if (dispMonth === 11) { setDispMonth(0); setDispYear(y => y + 1); }
-    else setDispMonth(m => m + 1);
-  };
-
-  function rangeBounds(): { from: string; to: string } | null {
-    if (!draftFrom) return null;
-    const to = draftTo ?? draftFrom;
-    return draftFrom <= to
-      ? { from: draftFrom, to }
-      : { from: to, to: draftFrom };
-  }
-
-  function isInRange(key: string): boolean {
-    const bounds = rangeBounds();
-    if (!bounds) return false;
-    return key >= bounds.from && key <= bounds.to;
-  }
-
-  function handleDayPress(date: Date) {
-    const key = localDateKey(date);
-    if (!draftFrom || draftTo) {
-      setDraftFrom(key);
-      setDraftTo(null);
-    } else if (key < draftFrom) {
-      setDraftTo(draftFrom);
-      setDraftFrom(key);
-    } else {
-      setDraftTo(key);
-    }
-  }
-
-  function handleAdd() {
-    const bounds = rangeBounds();
-    if (!bounds) return;
-    onAdd({
-      fromDate: bounds.from,
-      toDate: bounds.to,
-      note: note.trim() || undefined,
-    });
-    onClose();
-  }
-
-  const bounds = rangeBounds();
-
-  return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <TouchableWithoutFeedback onPress={onClose}>
-        <View style={cal.overlay}>
-          <TouchableWithoutFeedback onPress={() => {}}>
-            <View style={cal.sheet}>
-              <View style={cal.topBar} />
-              <View style={cal.header}>
-                <TouchableOpacity onPress={goPrev} style={cal.navBtn}
-                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                  <Ionicons name="chevron-back" size={20} color={W.orange} />
-                </TouchableOpacity>
-                <Text style={cal.monthLabel}>
-                  {MONTH_NAMES[dispMonth]} {dispYear}
-                </Text>
-                <TouchableOpacity onPress={goNext} style={cal.navBtn}
-                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                  <Ionicons name="chevron-forward" size={20} color={W.orange} />
-                </TouchableOpacity>
-              </View>
-              <Text style={s.closureModalHint}>
-                {bounds
-                  ? `Termín: ${fmtDateKey(bounds.from)} – ${fmtDateKey(bounds.to)}`
-                  : 'Vyberte první den, pak poslední den uzavření'}
-              </Text>
-              <View style={cal.dayLabelsRow}>
-                {DAY_ABBR.map(label => (
-                  <View key={label} style={cal.dayLabelCell}>
-                    <Text style={cal.dayLabelText}>{label}</Text>
-                  </View>
-                ))}
-              </View>
-              {rows.map((row, ri) => (
-                <View key={ri} style={cal.gridRow}>
-                  {row.map((date, ci) => {
-                    const key     = localDateKey(date);
-                    const inMonth = date.getMonth() === dispMonth;
-                    const inRange = isInRange(key);
-                    const isStart = bounds && key === bounds.from;
-                    const isEnd   = bounds && key === bounds.to;
-                    return (
-                      <TouchableOpacity
-                        key={ci}
-                        onPress={() => handleDayPress(date)}
-                        activeOpacity={0.65}
-                        style={[
-                          cal.dayCell,
-                          inRange && cal.dayCellActive,
-                          isStart && s.closureRangeStart,
-                          isEnd && s.closureRangeEnd,
-                        ]}
-                      >
-                        <Text style={[
-                          cal.dayNum,
-                          !inMonth && cal.dayNumFaded,
-                          inRange && cal.dayNumActive,
-                        ]}>
-                          {date.getDate()}
-                        </Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </View>
-              ))}
-              <Text style={s.closureNoteFieldLabel}>VLASTNÍ POZNÁMKA</Text>
-              <Text style={s.closureNoteFieldHint}>
-                Text zobrazený hráčům v termínu uzavření (volitelné)
-              </Text>
-              <TextInput
-                style={s.closureNoteInput}
-                placeholder="Např. rekonstrukce kurtů, svátek klubu…"
-                placeholderTextColor={colors.textDisabled}
-                value={note}
-                onChangeText={setNote}
-                multiline
-              />
-              <View style={s.closureModalActions}>
-                <TouchableOpacity onPress={onClose} style={s.closureModalCancel}>
-                  <Text style={s.closureModalCancelText}>ZRUŠIT</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  onPress={handleAdd}
-                  disabled={!bounds}
-                  style={[s.closureModalAdd, !bounds && { opacity: 0.4 }]}
-                >
-                  <Text style={s.closureModalAddText}>PŘIDAT UZAVŘENÍ</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          </TouchableWithoutFeedback>
-        </View>
-      </TouchableWithoutFeedback>
-    </Modal>
-  );
-}
-
 // ─── Kalendářový výběr týdne ─────────────────────────────────────────────────
 
-function WeekPickerModal({ visible, weekOffset, onSelectWeek, onClose, maxBookingDaysAhead }: {
+function WeekPickerModal({ visible, weekOffset, onSelectWeek, onClose, maxBookingDaysAhead, dayOverrideKeys }: {
   visible: boolean;
   weekOffset: number;
   onSelectWeek: (offset: number) => void;
   onClose: () => void;
   maxBookingDaysAhead: number;
+  dayOverrideKeys?: string[];
 }) {
   const [dispMonth, setDispMonth] = useState(0);
   const [dispYear,  setDispYear]  = useState(() => new Date().getFullYear());
@@ -1490,6 +1586,7 @@ function WeekPickerModal({ visible, weekOffset, onSelectWeek, onClose, maxBookin
                       const isLast   = ci === 6;
                       const dateNorm = new Date(date); dateNorm.setHours(0, 0, 0, 0);
                       const isBeyond = dateNorm > bookingDeadline;
+                      const hasOverride = dayOverrideKeys?.includes(key);
                       return (
                         <TouchableOpacity
                           key={ci}
@@ -1511,6 +1608,9 @@ function WeekPickerModal({ visible, weekOffset, onSelectWeek, onClose, maxBookin
                           </Text>
                           {isBeyond && inMonth && !isSel && (
                             <Ionicons name="lock-closed-outline" size={7} color={colors.textDisabled} style={cal.beyondIcon} />
+                          )}
+                          {hasOverride && inMonth && (
+                            <View style={[cal.overrideDot, isSel && cal.overrideDotSel]} />
                           )}
                           {isToday && (
                             <View style={[cal.todayDot, isSel && cal.todayDotSel]} />
@@ -1587,7 +1687,7 @@ function ClubBookingCreateModal({ court, date, slotIdx, closingSlot, settings, o
     note?: string;
   }) => void;
 }) {
-  const [durationMinutes, setDurationMinutes] = useState(60);
+  const [durationMinutes, setDurationMinutes] = useState(settings.minBookingDurationMinutes);
   const [playerMode, setPlayerMode]           = useState<PlayerInputMode>('registered');
   const [playerSearch, setPlayerSearch]       = useState('');
   const [selectedPlayerId, setSelectedPlayerId] = useState<string | null>(null);
@@ -1681,9 +1781,13 @@ function ClubBookingCreateModal({ court, date, slotIdx, closingSlot, settings, o
           <ScrollView keyboardShouldPersistTaps="handled">
             <View style={s.detailRows}>
               <Text style={s.fieldLabel}>DÉLKA REZERVACE</Text>
+              <Text style={{ fontSize: 12, color: colors.textMuted, marginBottom: 6 }}>
+                Minimální doba: {settings.minBookingDurationMinutes} min
+              </Text>
               <View style={s.chipRow}>
                 {DURATION_OPTIONS.map(mins => {
-                  const valid = isDurationValid(mins, slotIdx, closingSlot, occupiedSlots);
+                  const belowMin = mins < settings.minBookingDurationMinutes;
+                  const valid = !belowMin && isDurationValid(mins, slotIdx, closingSlot, occupiedSlots);
                   const selected = durationMinutes === mins;
                   return (
                     <TouchableOpacity
@@ -1875,17 +1979,22 @@ function ClubBookingCreateModal({ court, date, slotIdx, closingSlot, settings, o
 
 // ─── Detail rezervace (popup) ─────────────────────────────────────────────────
 
-function BookingDetailModal({ booking, court, maxBookingDaysAhead, closingSlot, occupiedSlots, onClose, onUpdatePayment, onChangeDate, onChangeDuration, onUpdateNote, onCancel }: {
+function BookingDetailModal({ booking, court, maxBookingDaysAhead, minBookingDurationMinutes, closingSlot, occupiedSlots, undoPosition, undoLabel, revertError, onClose, onUpdatePayment, onChangeDate, onChangeDuration, onUpdateNote, onRevert, onCancel }: {
   booking: ClubBooking;
   court: CourtWithClub | null;
   maxBookingDaysAhead: number;
+  minBookingDurationMinutes: number;
   closingSlot: number;
   occupiedSlots: Set<number>;
+  undoPosition: OriginalBookingPosition | null;
+  undoLabel: string;
+  revertError: string | null;
   onClose: () => void;
   onUpdatePayment: (status: 'paid' | 'pay_on_site' | 'pending') => void;
   onChangeDate: (newDate: string) => { ok: true; booking: ClubBooking } | { ok: false; error: string };
   onChangeDuration: (durationMinutes: number) => { ok: true; booking: ClubBooking } | { ok: false; error: string };
   onUpdateNote: (note: string | undefined) => void;
+  onRevert: () => void;
   onCancel: () => void;
 }) {
   const [confirmCancel, setConfirmCancel]   = useState(false);
@@ -1982,9 +2091,13 @@ function BookingDetailModal({ booking, court, maxBookingDaysAhead, closingSlot, 
               {!isPast ? (
                 <>
                   <Text style={[s.fieldLabel, { marginTop: 8, marginBottom: 0 }]}>TRVÁNÍ</Text>
+                  <Text style={{ fontSize: 12, color: colors.textMuted, marginTop: 4 }}>
+                    Minimální doba: {minBookingDurationMinutes} min
+                  </Text>
                   <View style={[s.chipRow, { marginTop: 8 }]}>
                     {DURATION_OPTIONS.map(mins => {
-                      const valid = isDurationValid(mins, slotMin, closingSlot, occupiedSlots);
+                      const belowMin = mins < minBookingDurationMinutes;
+                      const valid = !belowMin && isDurationValid(mins, slotMin, closingSlot, occupiedSlots);
                       const selected = currentDuration === mins;
                       return (
                         <TouchableOpacity
@@ -2020,6 +2133,22 @@ function BookingDetailModal({ booking, court, maxBookingDaysAhead, closingSlot, 
                 <Text style={s.detailDateError}>{dateError}</Text>
               )}
             </View>
+
+            {/* Vrátit přesunutou rezervaci na původní místo */}
+            {!isPast && undoPosition && (
+              <View style={s.detailUndoSection}>
+                <TouchableOpacity onPress={onRevert} style={s.detailUndoBtn} activeOpacity={0.75}>
+                  <Ionicons name="arrow-undo" size={18} color={W.orange} />
+                  <View style={{ flex: 1, gap: 2 }}>
+                    <Text style={s.detailUndoTitle}>Vrátit na původní místo</Text>
+                    <Text style={s.detailUndoSub} numberOfLines={2}>{undoLabel}</Text>
+                  </View>
+                </TouchableOpacity>
+                {revertError && (
+                  <Text style={s.detailDateError}>{revertError}</Text>
+                )}
+              </View>
+            )}
 
             {/* Poznámka */}
             {!isPast ? (
@@ -2132,102 +2261,338 @@ function DetailRow({ icon, label, value, accent }: {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// TAB: KURTY — správa detailů
+// TAB: KURTY — kategorie a přiřazení kurtů
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function CourtsTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
-  const { courts, updateCourt, settings, updateSettings } = hook;
-  const [editingCourt, setEditingCourt] = useState<CourtWithClub | null>(null);
-  const [pricingCourtId, setPricingCourtId] = useState<string | null>(null);
-  const [seasonCourt, setSeasonCourt] = useState<CourtWithClub | null>(null);
+function CourtListItem({
+  court,
+  onEdit,
+  onAssign,
+  showAssign,
+  categoryColor,
+  drag,
+  isDragging,
+}: {
+  court: CourtWithClub;
+  onEdit: () => void;
+  onAssign?: () => void;
+  showAssign?: boolean;
+  categoryColor?: string;
+  drag?: () => void;
+  isDragging?: boolean;
+}) {
+  const accent = categoryColor ?? (SPORT_COLORS[court.sport] ?? W.orange);
+  return (
+    <View style={[s.courtRow, isDragging && s.draggingRow]}>
+      {drag && (
+        <TouchableOpacity
+          onLongPress={drag}
+          delayLongPress={120}
+          style={s.dragHandleCourt}
+          accessibilityLabel="Přesunout kurt"
+        >
+          <Ionicons name="reorder-three" size={20} color={colors.textMuted} />
+        </TouchableOpacity>
+      )}
+      <View style={[s.courtRowBar, { backgroundColor: accent }]} />
+      <View style={s.courtRowInfo}>
+        <Text style={s.courtRowName}>{court.name}</Text>
+        <Text style={s.courtRowMeta}>
+          {SPORT_LABELS[court.sport]} · {SURFACE_LABELS[court.surface]}
+          {' · '}{court.is_indoor ? 'Hala' : 'Venkovní'}
+          {' · '}max {court.capacity} hráčů
+        </Text>
+        <Text style={s.courtRowClub}>{court.club_name}, {court.club_city}</Text>
+      </View>
+      {showAssign && onAssign && (
+        <TouchableOpacity onPress={onAssign} style={s.editIconBtn}>
+          <Ionicons name="folder-open-outline" size={20} color="#6366F1" />
+        </TouchableOpacity>
+      )}
+      <TouchableOpacity onPress={onEdit} style={s.editIconBtn}>
+        <Ionicons name="create-outline" size={20} color={colors.textSecondary} />
+      </TouchableOpacity>
+    </View>
+  );
+}
 
-  function courtSeasonHint(courtId: string): string | null {
-    if (!settings.seasonalModeEnabled) return null;
-    const cfg = settings.courtSeasonSettings[courtId];
-    if (!cfg) return null;
-    if (cfg.closedInSummer && cfg.closedInWinter) return 'Sezónně uzavřeno';
-    if (cfg.closedInSummer) return 'V létě uzavřeno';
-    if (cfg.closedInWinter) return 'V zimě uzavřeno';
-    if (cfg.useCustomProfiles) return 'Vlastní sezónní profil';
-    return null;
+function CourtsTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
+  const {
+    courts, updateCourt, createCourt, settings, saveCategory, deleteCategory,
+    bookings, updateSettings,
+    reorderCategories, reorderCourtsInCategory, reorderUncategorizedCourts,
+  } = hook;
+  const [editingCourt, setEditingCourt] = useState<CourtWithClub | null>(null);
+  const [creatingCourt, setCreatingCourt] = useState(false);
+  const [categoryModalVisible, setCategoryModalVisible] = useState(false);
+  const [editingCategory, setEditingCategory] = useState<CourtCategory | null>(null);
+  const [assignCourt, setAssignCourt] = useState<CourtWithClub | null>(null);
+
+  const uncategorized = useMemo(
+    () => getUncategorizedCourts(courts, settings),
+    [courts, settings.categories, settings.uncategorizedCourtOrder],
+  );
+
+  function openNewCategory() {
+    setEditingCategory(null);
+    setCategoryModalVisible(true);
   }
+
+  function openEditCategory(cat: CourtCategory) {
+    setEditingCategory(cat);
+    setCategoryModalVisible(true);
+  }
+
+  function confirmDeleteCategory(cat: CourtCategory) {
+    Alert.alert(
+      'Smazat kategorii',
+      `Opravdu smazat „${cat.name}"? Kurty zůstanou nezařazené.`,
+      [
+        { text: 'Zrušit', style: 'cancel' },
+        { text: 'Smazat', style: 'destructive', onPress: () => deleteCategory(cat.id) },
+      ],
+    );
+  }
+
+  function handleAssignToCategory(categoryId: string) {
+    if (!assignCourt) return;
+    const cat = getCategoryById(settings, categoryId);
+    if (!cat) return;
+    saveCategory({
+      ...cat,
+      court_ids: [...cat.court_ids, assignCourt.id],
+    });
+    setAssignCourt(null);
+  }
+
+  const renderCategory = useCallback(({ item: cat, drag, isActive }: RenderItemParams<CourtCategory>) => {
+    const catCourts = courtsInCategory(courts, cat.id, settings);
+    const seasonName = getCategorySeasonLabel(settings, cat.season_id);
+    const seasonClosed = settings.seasonalModeEnabled
+      && isSeasonClosed(getSeasonById(settings, cat.season_id ?? ''));
+    const catColor = resolveCategoryColorHex(cat.color);
+    return (
+      <ScaleDecorator>
+        <View style={[s.categoryBlock, isActive && s.draggingBlock]}>
+          <View style={s.categoryHeader}>
+            <View style={[s.categoryHeaderBar, { backgroundColor: catColor }]} />
+            <View style={s.categoryHeaderBody}>
+              <TouchableOpacity
+                onLongPress={drag}
+                delayLongPress={120}
+                style={s.dragHandle}
+                accessibilityLabel="Přesunout kategorii"
+              >
+                <Ionicons name="reorder-three" size={22} color={colors.textMuted} />
+              </TouchableOpacity>
+              <View style={{ flex: 1 }}>
+                <View style={s.categoryTitleRow}>
+                  <Text style={s.categoryTitle}>{cat.name}</Text>
+                  {seasonClosed && (
+                    <View style={s.closedSeasonBadge}>
+                      <Text style={s.closedSeasonBadgeText}>ZAVŘENO</Text>
+                    </View>
+                  )}
+                </View>
+                <Text style={s.categoryMeta}>
+                  {catCourts.length} {catCourts.length === 1 ? 'kurt' : catCourts.length < 5 ? 'kurty' : 'kurtů'}
+                  {seasonName ? ` · ${seasonName}` : ''}
+                </Text>
+              </View>
+              <TouchableOpacity onPress={() => openEditCategory(cat)} style={s.categoryActionBtn}>
+                <Ionicons name="create-outline" size={18} color={colors.textSecondary} />
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => confirmDeleteCategory(cat)} style={s.categoryActionBtn}>
+                <Ionicons name="trash-outline" size={18} color={W.red} />
+              </TouchableOpacity>
+            </View>
+          </View>
+          {catCourts.length === 0 ? (
+            <Text style={s.emptyCategoryHint}>Žádné kurty — upravte kategorii a přiřaďte je.</Text>
+          ) : (
+            <DraggableFlatList
+              data={catCourts}
+              keyExtractor={court => court.id}
+              scrollEnabled={false}
+              activationDistance={8}
+              onDragEnd={({ from, to }) => {
+                if (from !== to) reorderCourtsInCategory(cat.id, from, to);
+              }}
+              renderItem={({ item: court, drag: courtDrag, isActive: courtActive }) => (
+                <ScaleDecorator>
+                  <CourtListItem
+                    court={court}
+                    categoryColor={catColor}
+                    drag={courtDrag}
+                    isDragging={courtActive}
+                    onEdit={() => setEditingCourt(court)}
+                  />
+                </ScaleDecorator>
+              )}
+            />
+          )}
+        </View>
+      </ScaleDecorator>
+    );
+  }, [courts, settings, reorderCourtsInCategory]);
 
   return (
     <ScrollView contentContainerStyle={s.courtList}>
-      <Text style={s.sectionTitle}>KURTY A SPORTOVIŠTĚ</Text>
-      {settings.seasonalModeEnabled && (
-        <Text style={s.seasonHint}>
-          U každého kurtu lze nastavit sezónní uzavření nebo vlastní provoz a ceník pro léto/zimu.
-        </Text>
+      <View style={s.courtsTabHeader}>
+        <Text style={s.sectionTitle}>KURTY A KATEGORIE</Text>
+        <View style={s.courtsTabHeaderActions}>
+          <TouchableOpacity onPress={() => setCreatingCourt(true)} style={s.addCourtBtn} activeOpacity={0.8}>
+            <Ionicons name="add-circle-outline" size={16} color={W.orange} />
+            <Text style={s.addCourtBtnText}>Nový kurt</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={openNewCategory} style={s.addCategoryBtn} activeOpacity={0.8}>
+            <Ionicons name="add-circle-outline" size={16} color="#6366F1" />
+            <Text style={s.addCategoryBtnText}>Nová kategorie</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+      <Text style={s.courtsTabHint}>
+        {settings.seasonalModeEnabled
+          ? 'Seskupte kurty do kategorií podle sezóny. Provozní dobu, ceník a uzavření nastavíte v záložce Nastavení.'
+          : 'Seskupte kurty do kategorií. Provozní dobu, ceník a uzavření nastavíte v záložce Nastavení.'}
+      </Text>
+      <Text style={s.reorderHint}>
+        Pořadí kategorií a kurtů přetáhněte ikonou ≡ — projeví se i v záložce Přehled.
+      </Text>
+
+      {settings.categories.length > 0 && (
+        <DraggableFlatList
+          data={settings.categories}
+          keyExtractor={cat => cat.id}
+          scrollEnabled={false}
+          activationDistance={8}
+          onDragEnd={({ from, to }) => {
+            if (from !== to) reorderCategories(from, to);
+          }}
+          renderItem={renderCategory}
+        />
       )}
-      {courts.map(court => {
-        const accent = SPORT_COLORS[court.sport] ?? W.orange;
-        const seasonHint = courtSeasonHint(court.id);
-        return (
-          <View key={court.id} style={s.courtRow}>
-            <View style={[s.courtRowBar, { backgroundColor: accent }]} />
-            <View style={s.courtRowInfo}>
-              <Text style={s.courtRowName}>{court.name}</Text>
-              <Text style={s.courtRowMeta}>
-                {SPORT_LABELS[court.sport]} · {SURFACE_LABELS[court.surface]}
-                {' · '}{court.is_indoor ? 'Hala' : 'Venkovní'}
-                {' · '}{court.price_per_hour} Kč/hod
-                {' · '}max {court.capacity} hráčů
-              </Text>
-              {seasonHint && (
-                <Text style={[s.courtRowMeta, { color: '#0EA5E9', fontWeight: '700' }]}>
-                  {seasonHint}
+
+      {settings.categories.length === 0 && (
+        <Text style={s.emptyCategoryHint}>Zatím nemáte žádné kategorie. Vytvořte první tlačítkem výše.</Text>
+      )}
+
+      {uncategorized.length > 0 && (
+        <View style={s.categoryBlock}>
+          <View style={s.categoryHeader}>
+            <View style={[s.categoryHeaderBar, { backgroundColor: colors.textMuted }]} />
+            <View style={s.categoryHeaderBody}>
+              <View style={{ flex: 1 }}>
+                <Text style={s.categoryTitle}>Bez kategorie</Text>
+                <Text style={s.categoryMeta}>
+                  {uncategorized.length} {uncategorized.length === 1 ? 'kurt' : uncategorized.length < 5 ? 'kurty' : 'kurtů'}
+                  {' · '}používají globální nastavení klubu
                 </Text>
-              )}
-              <Text style={s.courtRowClub}>{court.club_name}, {court.club_city}</Text>
+              </View>
             </View>
-            <TouchableOpacity onPress={() => setEditingCourt(court)} style={s.editIconBtn}>
-              <Ionicons name="create-outline" size={20} color={colors.textSecondary} />
-            </TouchableOpacity>
-            {settings.seasonalModeEnabled && (
-              <TouchableOpacity onPress={() => setSeasonCourt(court)} style={s.editIconBtn}>
-                <Ionicons name="sunny-outline" size={20} color="#0EA5E9" />
-              </TouchableOpacity>
-            )}
-            <TouchableOpacity onPress={() => setPricingCourtId(court.id)} style={s.editIconBtn}>
-              <Ionicons name="pricetag-outline" size={20} color={W.orange} />
-            </TouchableOpacity>
           </View>
-        );
-      })}
+          <DraggableFlatList
+            data={uncategorized}
+            keyExtractor={court => court.id}
+            scrollEnabled={false}
+            activationDistance={8}
+            onDragEnd={({ from, to }) => {
+              if (from !== to) reorderUncategorizedCourts(from, to);
+            }}
+            renderItem={({ item: court, drag, isActive }) => (
+              <ScaleDecorator>
+                <CourtListItem
+                  court={court}
+                  drag={drag}
+                  isDragging={isActive}
+                  showAssign
+                  onEdit={() => setEditingCourt(court)}
+                  onAssign={() => setAssignCourt(court)}
+                />
+              </ScaleDecorator>
+            )}
+          />
+        </View>
+      )}
+
+      <CourtCategoryEditModal
+        visible={categoryModalVisible}
+        category={editingCategory}
+        courts={courts}
+        allCategories={settings.categories}
+        seasons={settings.seasons ?? []}
+        seasonalModeEnabled={settings.seasonalModeEnabled}
+        onClose={() => { setCategoryModalVisible(false); setEditingCategory(null); }}
+        onSave={(cat) => { saveCategory(cat); setCategoryModalVisible(false); setEditingCategory(null); }}
+      />
+
+      {assignCourt && (
+        <Modal visible transparent animationType="fade" onRequestClose={() => setAssignCourt(null)}>
+          <TouchableOpacity style={s.assignOverlay} activeOpacity={1} onPress={() => setAssignCourt(null)}>
+            <View style={s.assignSheet}>
+              <Text style={s.assignTitle}>PŘIŘADIT KURT</Text>
+              <Text style={s.assignSub}>{assignCourt.name}</Text>
+              {settings.categories.length === 0 ? (
+                <Text style={s.assignEmpty}>Nejdříve vytvořte kategorii.</Text>
+              ) : (
+                settings.categories.map(cat => (
+                  <TouchableOpacity
+                    key={cat.id}
+                    onPress={() => handleAssignToCategory(cat.id)}
+                    style={s.assignRow}
+                    activeOpacity={0.7}
+                  >
+                    <View style={[s.assignColorDot, { backgroundColor: resolveCategoryColorHex(cat.color) }]} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={s.assignRowName}>{cat.name}</Text>
+                      {settings.seasonalModeEnabled && cat.season_id && (
+                        <Text style={s.assignRowMeta}>{getCategorySeasonLabel(settings, cat.season_id)}</Text>
+                      )}
+                    </View>
+                  </TouchableOpacity>
+                ))
+              )}
+              <TouchableOpacity onPress={() => setAssignCourt(null)} style={s.assignCancel}>
+                <Text style={s.assignCancelText}>Zrušit</Text>
+              </TouchableOpacity>
+            </View>
+          </TouchableOpacity>
+        </Modal>
+      )}
+
+      {creatingCourt && (
+        <CourtEditModal
+          isCreate
+          categories={settings.categories}
+          settings={settings}
+          bookings={bookings}
+          updateSettings={updateSettings}
+          onSave={(data) => {
+            createCourt(data);
+            setCreatingCourt(false);
+          }}
+          onClose={() => setCreatingCourt(false)}
+        />
+      )}
 
       {editingCourt && (
         <CourtEditModal
           court={editingCourt}
-          onSave={(updates) => { updateCourt(editingCourt.id, updates); setEditingCourt(null); }}
-          onClose={() => setEditingCourt(null)}
-        />
-      )}
-
-      <CourtPricingModal
-        visible={pricingCourtId !== null}
-        courts={courts}
-        settings={settings}
-        initialCourtId={pricingCourtId ?? undefined}
-        onClose={() => setPricingCourtId(null)}
-        onSave={(pricing) => updateSettings({ pricing })}
-      />
-
-      {seasonCourt && (
-        <CourtSeasonModal
-          visible
-          court={seasonCourt}
+          uncategorized={!editingCourt.category_id && !settings.categories.some(c => c.court_ids.includes(editingCourt.id))}
           settings={settings}
-          onClose={() => setSeasonCourt(null)}
-          onSave={(cfg) => {
-            updateSettings({
-              courtSeasonSettings: {
-                ...settings.courtSeasonSettings,
-                [seasonCourt.id]: cfg,
-              },
+          bookings={bookings}
+          updateSettings={updateSettings}
+          onSave={(updates) => {
+            updateCourt(editingCourt.id, {
+              name: updates.name,
+              sport: updates.sport,
+              surface: updates.surface,
+              is_indoor: updates.is_indoor,
+              capacity: updates.capacity,
             });
-            setSeasonCourt(null);
+            setEditingCourt(null);
           }}
+          onClose={() => setEditingCourt(null)}
         />
       )}
     </ScrollView>
@@ -2251,19 +2616,86 @@ const SPORTS: { value: SportType; label: string }[] = [
   { value: 'volleyball', label: 'Volejbal' },
 ];
 
-function CourtEditModal({ court, onSave, onClose }: {
-  court: CourtWithClub;
-  onSave: (updates: Partial<CourtWithClub>) => void;
+function CourtEditModal({
+  court,
+  isCreate = false,
+  categories = [],
+  uncategorized,
+  settings,
+  bookings,
+  updateSettings,
+  onSave,
+  onClose,
+}: {
+  court?: CourtWithClub;
+  isCreate?: boolean;
+  categories?: CourtCategory[];
+  uncategorized?: boolean;
+  settings: ClubSettings;
+  bookings: ClubBooking[];
+  updateSettings: (updates: Partial<ClubSettings>) => void;
+  onSave: (data: {
+    name: string;
+    sport: SportType;
+    surface: CourtSurface;
+    is_indoor: boolean;
+    capacity: number;
+    categoryId?: string | null;
+  }) => void;
   onClose: () => void;
 }) {
-  const [name,     setName]     = useState(court.name);
-  const [sport,    setSport]    = useState<SportType>(court.sport);
-  const [surface,  setSurface]  = useState<CourtSurface>(court.surface);
-  const [isIndoor, setIsIndoor] = useState(court.is_indoor);
-  const [price,    setPrice]    = useState(String(court.price_per_hour));
-  const [capacity, setCapacity] = useState(court.capacity);
+  const [name,     setName]     = useState(court?.name ?? '');
+  const [sport,    setSport]    = useState<SportType>(court?.sport ?? 'tennis');
+  const [surface,  setSurface]  = useState<CourtSurface>(court?.surface ?? 'clay');
+  const [isIndoor, setIsIndoor] = useState(court?.is_indoor ?? false);
+  const [capacity, setCapacity] = useState(court?.capacity ?? 4);
+  const [categoryId, setCategoryId] = useState<string | null>(
+    isCreate ? null : (court?.category_id ?? null),
+  );
+  const [closureModalVisible, setClosureModalVisible] = useState(false);
 
-  const accent = SPORT_COLORS[sport] ?? W.orange;
+  const courtClosures = useMemo(
+    () => (court ? getCourtClosurePeriods(court.id, settings) : []),
+    [court, settings.closurePeriods],
+  );
+
+  const selectedCategory = categoryId ? getCategoryById(settings, categoryId) : undefined;
+  const accent = isCreate && selectedCategory
+    ? resolveCategoryColorHex(selectedCategory.color)
+    : (SPORT_COLORS[sport] ?? W.orange);
+
+  const nameValid = name.trim().length > 0;
+
+  function handleCategorySelect(id: string | null) {
+    setCategoryId(id);
+  }
+
+  function handleSave() {
+    if (!nameValid) {
+      Alert.alert('Chybí název', 'Zadejte název kurtu.');
+      return;
+    }
+    onSave({
+      name: name.trim(),
+      sport,
+      surface,
+      is_indoor: isIndoor,
+      capacity,
+      ...(isCreate ? { categoryId } : {}),
+    });
+  }
+
+  function addCourtClosure(period: Omit<ClubClosurePeriod, 'id'>) {
+    updateSettings({
+      closurePeriods: [...settings.closurePeriods, { ...period, id: `closure_${Date.now()}` }],
+    });
+  }
+
+  function removeCourtClosure(id: string) {
+    updateSettings({
+      closurePeriods: settings.closurePeriods.filter(p => p.id !== id),
+    });
+  }
 
   return (
     <Modal visible transparent animationType="slide" onRequestClose={onClose}>
@@ -2273,16 +2705,63 @@ function CourtEditModal({ court, onSave, onClose }: {
           <ScrollView showsVerticalScrollIndicator={false}>
             <View style={[s.modalBar, { backgroundColor: accent }]} />
             <View style={s.modalBody}>
-              <Text style={s.modalTitle}>UPRAVIT KURT</Text>
+              <Text style={s.modalTitle}>{isCreate ? 'NOVÝ KURT' : 'UPRAVIT KURT'}</Text>
+              {!isCreate && uncategorized && (
+                <View style={s.uncategorizedBanner}>
+                  <Ionicons name="information-circle" size={16} color="#6366F1" />
+                  <Text style={s.uncategorizedBannerText}>
+                    Kurt není v žádné kategorii — provoz a ceník berou globální nastavení klubu.
+                    Přiřaďte kategorii v záložce Kurty.
+                  </Text>
+                </View>
+              )}
 
               <Text style={s.fieldLabel}>NÁZEV KURTU</Text>
               <TextInput
-                style={s.fieldInput}
+                style={[s.fieldInput, !nameValid && name.length > 0 && s.fieldInputError]}
                 value={name}
                 onChangeText={setName}
                 placeholder="Název kurtu"
                 placeholderTextColor={colors.textDisabled}
+                autoFocus={isCreate}
               />
+
+              {isCreate && (
+                <>
+                  <Text style={s.fieldLabel}>KATEGORIE (VOLITELNÉ)</Text>
+                  <Text style={s.courtCreateCategoryHint}>
+                    Barva kurtu se odvodí z vybrané kategorie. Bez kategorie platí globální nastavení klubu.
+                  </Text>
+                  <View style={s.chipRow}>
+                    <TouchableOpacity
+                      onPress={() => handleCategorySelect(null)}
+                      style={[s.chip, categoryId === null && { backgroundColor: accent, borderColor: 'transparent' }]}
+                    >
+                      <Text style={[s.chipText, categoryId === null && { color: '#fff' }]}>
+                        Bez kategorie
+                      </Text>
+                    </TouchableOpacity>
+                    {categories.map(cat => {
+                      const catColor = resolveCategoryColorHex(cat.color);
+                      const selected = categoryId === cat.id;
+                      return (
+                        <TouchableOpacity
+                          key={cat.id}
+                          onPress={() => handleCategorySelect(cat.id)}
+                          style={[
+                            s.chip,
+                            selected && { backgroundColor: catColor, borderColor: 'transparent' },
+                          ]}
+                        >
+                          <Text style={[s.chipText, selected && { color: '#fff' }]}>
+                            {cat.name}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                </>
+              )}
 
               <Text style={s.fieldLabel}>SPORT</Text>
               <View style={s.chipRow}>
@@ -2318,16 +2797,6 @@ function CourtEditModal({ court, onSave, onClose }: {
                 />
               </View>
 
-              <Text style={s.fieldLabel}>CENA (Kč / hodina)</Text>
-              <TextInput
-                style={s.fieldInput}
-                value={price}
-                onChangeText={setPrice}
-                keyboardType="numeric"
-                placeholder="250"
-                placeholderTextColor={colors.textDisabled}
-              />
-
               <Text style={s.fieldLabel}>MAX. POČET HRÁČŮ</Text>
               <View style={s.stepperRow}>
                 <TouchableOpacity onPress={() => setCapacity(c => Math.max(1, c - 1))}
@@ -2341,15 +2810,61 @@ function CourtEditModal({ court, onSave, onClose }: {
                 </TouchableOpacity>
               </View>
 
+              {!isCreate && (
+              <View style={s.courtClosureSection}>
+                <Text style={s.fieldLabel}>DOČASNÉ UZAVŘENÍ</Text>
+                <Text style={s.courtClosureHint}>
+                  Kurt bude v zvoleném období nedostupný pro rezervace. Ostatní kurty zůstanou otevřené.
+                </Text>
+                {courtClosures.length > 0 && (
+                  <View style={s.closurePeriodList}>
+                    {courtClosures.map(p => (
+                      <View key={p.id} style={s.closurePeriodRow}>
+                        <View style={{ flex: 1 }}>
+                          <View style={s.exceptionTypeRow}>
+                            <Ionicons name="lock-closed" size={14} color={W.red} />
+                            <Text style={s.closurePeriodDates}>
+                              {fmtDateKey(p.fromDate)}{p.fromDate !== p.toDate ? ` · ${fmtDateKey(p.toDate)}` : ''}
+                              {' · '}{formatCourtClosureType(p)}
+                            </Text>
+                          </View>
+                          {p.note ? (
+                            <Text style={s.courtClosureNote}>{p.note}</Text>
+                          ) : null}
+                        </View>
+                        <TouchableOpacity
+                          onPress={() => removeCourtClosure(p.id)}
+                          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                        >
+                          <Ionicons name="trash-outline" size={18} color={W.red} />
+                        </TouchableOpacity>
+                      </View>
+                    ))}
+                  </View>
+                )}
+                <TouchableOpacity
+                  onPress={() => setClosureModalVisible(true)}
+                  style={[s.closureAddBtn, { borderColor: W.red }]}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons name="lock-closed-outline" size={16} color={W.red} />
+                  <Text style={[s.closureAddBtnText, { color: W.red }]}>Uzavřít kurt</Text>
+                </TouchableOpacity>
+              </View>
+              )}
+
               <TouchableOpacity
-                onPress={() => onSave({
-                  name, sport, surface, is_indoor: isIndoor,
-                  price_per_hour: Number(price) || court.price_per_hour,
-                  capacity,
-                })}
-                style={[s.saveBtn, { backgroundColor: accent }]}
+                onPress={handleSave}
+                style={[
+                  s.saveBtn,
+                  { backgroundColor: accent },
+                  !nameValid && s.saveBtnDisabled,
+                ]}
+                disabled={!nameValid}
               >
-                <Text style={s.saveBtnText}>ULOŽIT ZMĚNY</Text>
+                <Text style={s.saveBtnText}>
+                  {isCreate ? 'VYTVOŘIT KURT' : 'ULOŽIT ZMĚNY'}
+                </Text>
               </TouchableOpacity>
               <TouchableOpacity onPress={onClose} style={s.cancelModalBtn}>
                 <Text style={s.cancelModalText}>Zrušit</Text>
@@ -2358,6 +2873,19 @@ function CourtEditModal({ court, onSave, onClose }: {
           </ScrollView>
         </View>
       </View>
+
+      {!isCreate && court && (
+      <ClosureExceptionModal
+        visible={closureModalVisible}
+        settings={settings}
+        bookings={bookings}
+        onClose={() => setClosureModalVisible(false)}
+        onAddClosure={addCourtClosure}
+        onApplyDayOverrides={() => {}}
+        fixedCourtId={court.id}
+        fixedCourtName={court.name}
+      />
+      )}
     </Modal>
   );
 }
@@ -2367,18 +2895,92 @@ function CourtEditModal({ court, onSave, onClose }: {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const LOCK_OPTIONS = [0, 1, 2, 4, 8, 12, 24, 48, 72];
+const MIN_DURATION_OPTIONS = [30, 60, 90, 120, 150, 180] as const;
 const SLOT_OPTIONS = ALL_SLOTS; // 0–29
 
 function SettingsTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
-  const { settings, updateSettings, courts, bookings } = hook;
+  const {
+    settings, updateSettings, updateSeason, courts, bookings,
+    setDayOverride, clearDayOverride, setCategoryDayOverride, clearCategoryDayOverride,
+    updateCategoryPricing, updateCategoryOpeningSchedule,
+  } = hook;
   const [closureModalVisible, setClosureModalVisible] = useState(false);
   const [closuresExpanded, setClosuresExpanded] = useState(false);
+  const [editDayOverrideKey, setEditDayOverrideKey] = useState<string | null>(null);
+  const [editCategoryOverride, setEditCategoryOverride] = useState<{ categoryId: string; dateKey: string } | null>(null);
   const [openingModalVisible, setOpeningModalVisible] = useState(false);
+  const [openingCategoryId, setOpeningCategoryId] = useState<string | null>(null);
   const [pricingModalVisible, setPricingModalVisible] = useState(false);
+  const [pricingCategoryId, setPricingCategoryId] = useState<string | null>(null);
   const [earlyCloseError, setEarlyCloseError] = useState<string | null>(null);
+  const [seasonFilter, setSeasonFilter] = useState<string | null>(() =>
+    getActiveCalendarSeason(hook.settings.seasons ?? [], localDateKey())?.id ?? null,
+  );
 
   const todayKey = localDateKey();
   const todayHours = getDayHoursForDate(todayKey, settings);
+  const uncategorized = useMemo(
+    () => getUncategorizedCourts(courts, settings),
+    [courts, settings.categories],
+  );
+  const filteredCategories = useMemo(
+    () => settings.seasonalModeEnabled
+      ? filterCategoriesBySeason(settings.categories, seasonFilter)
+      : settings.categories,
+    [settings.categories, settings.seasonalModeEnabled, seasonFilter],
+  );
+  const selectedFilterSeason = useMemo(
+    () => (seasonFilter ? settings.seasons?.find(s => s.id === seasonFilter) : undefined),
+    [settings.seasons, seasonFilter],
+  );
+
+  const dayOverrideKeys = useMemo(
+    () => Object.keys(settings.dayOverrides ?? {})
+      .filter(k => hasDayHoursOverride(k, settings))
+      .sort(),
+    [settings],
+  );
+
+  const categoryOverrideEntries = useMemo(() => {
+    const entries: { categoryId: string; dateKey: string }[] = [];
+    for (const [categoryId, dates] of Object.entries(settings.categoryDayOverrides ?? {})) {
+      for (const dateKey of Object.keys(dates)) {
+        if (hasCategoryDayHoursOverride(categoryId, dateKey, settings)) {
+          entries.push({ categoryId, dateKey });
+        }
+      }
+    }
+    return entries.sort((a, b) => a.dateKey.localeCompare(b.dateKey));
+  }, [settings]);
+
+  const clubAndCategoryClosures = useMemo(
+    () => settings.closurePeriods.filter(p => !p.courtId),
+    [settings.closurePeriods],
+  );
+
+  function trySetSeasonClosed(seasonId: string, isClosed: boolean) {
+    if (!isClosed) {
+      updateSeason(seasonId, { is_closed: false });
+      return;
+    }
+    const conflicts = findFutureBookingsForClosedSeason(bookings, settings, seasonId);
+    if (conflicts.length > 0) {
+      Alert.alert(
+        'Existující rezervace',
+        `${conflicts.length} budoucích potvrzených rezervací v období této sezóny. Opravdu označit sezónu jako uzavřenou?`,
+        [
+          { text: 'Zrušit', style: 'cancel' },
+          {
+            text: 'Uzavřít sezónu',
+            style: 'destructive',
+            onPress: () => updateSeason(seasonId, { is_closed: true }),
+          },
+        ],
+      );
+      return;
+    }
+    updateSeason(seasonId, { is_closed: true });
+  }
 
   function tryApplyEarlyClose(updates: {
     earlyCloseEnabled?: boolean;
@@ -2462,6 +3064,53 @@ function SettingsTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
     });
   }
 
+  function applyDayOverrides(entries: Record<string, DayHoursPartialOverride | null>) {
+    const next = { ...(settings.dayOverrides ?? {}) };
+    for (const [key, val] of Object.entries(entries)) {
+      if (val === null) delete next[key];
+      else next[key] = val;
+    }
+    updateSettings({ dayOverrides: next });
+  }
+
+  function tryClearDayOverride(dateKey: string) {
+    const conflicts = getBookingConflictsForClearingDayOverride(dateKey, bookings, settings);
+    if (conflicts.length > 0) {
+      Alert.alert('Nelze smazat výjimku', formatBookingConflictMessage(conflicts));
+      return;
+    }
+    clearDayOverride(dateKey);
+  }
+
+  function applyCategoryDayOverrides(
+    categoryId: string,
+    entries: Record<string, DayHoursPartialOverride | null>,
+  ) {
+    const current = settings.categoryDayOverrides?.[categoryId] ?? {};
+    const next = { ...current };
+    for (const [key, val] of Object.entries(entries)) {
+      if (val === null) delete next[key];
+      else next[key] = val;
+    }
+    updateSettings({
+      categoryDayOverrides: {
+        ...settings.categoryDayOverrides,
+        [categoryId]: next,
+      },
+    });
+  }
+
+  function tryClearCategoryDayOverride(categoryId: string, dateKey: string) {
+    const conflicts = getBookingConflictsForClearingDayOverride(
+      dateKey, bookings, settings, { categoryId },
+    );
+    if (conflicts.length > 0) {
+      Alert.alert('Nelze smazat výjimku', formatBookingConflictMessage(conflicts));
+      return;
+    }
+    clearCategoryDayOverride(categoryId, dateKey);
+  }
+
   return (
     <ScrollView contentContainerStyle={s.settingsList}>
       <Text style={s.sectionTitle}>NASTAVENÍ KLUBU</Text>
@@ -2534,9 +3183,9 @@ function SettingsTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
             activeOpacity={0.7}
           >
             <View style={{ flex: 1 }}>
-              <Text style={s.settingCardTitle}>Uzavření v termínu</Text>
+              <Text style={s.settingCardTitle}>Uzavření a výjimky</Text>
               <Text style={s.settingCardSub}>
-                Kalendář od–do — sportoviště je v dané dny kompletně uzavřeno.
+                Kompletní uzavření klubu nebo úprava otevírací doby pro konkrétní den či období.
               </Text>
             </View>
             <Ionicons
@@ -2547,14 +3196,21 @@ function SettingsTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
           </TouchableOpacity>
           {closuresExpanded && (
             <>
-              {settings.closurePeriods.length > 0 && (
+              {clubAndCategoryClosures.length > 0 && (
                 <View style={s.closurePeriodList}>
-                  {settings.closurePeriods.map(p => (
+                  <Text style={s.openingLabel}>UZAVŘENÉ TERMÍNY</Text>
+                  {clubAndCategoryClosures.map(p => (
                     <View key={p.id} style={s.closurePeriodRow}>
                       <View style={{ flex: 1 }}>
-                        <Text style={s.closurePeriodDates}>
-                          {fmtDateKey(p.fromDate)} – {fmtDateKey(p.toDate)}
-                        </Text>
+                        <View style={s.exceptionTypeRow}>
+                          <Ionicons name="lock-closed" size={14} color={W.red} />
+                          <Text style={s.closurePeriodDates}>
+                            {fmtDateKey(p.fromDate)}{p.fromDate !== p.toDate ? ` – ${fmtDateKey(p.toDate)}` : ''}
+                            {p.categoryId
+                              ? ` · ${getCategoryById(settings, p.categoryId)?.name ?? 'Kategorie'}`
+                              : ' · Celý klub'}
+                          </Text>
+                        </View>
                         <TextInput
                           style={s.closurePeriodNoteInput}
                           placeholder="Vlastní poznámka pro hráče (volitelné)"
@@ -2574,24 +3230,122 @@ function SettingsTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
                   ))}
                 </View>
               )}
+              {categoryOverrideEntries.length > 0 && (
+                <View style={s.closurePeriodList}>
+                  <Text style={s.openingLabel}>VÝJIMKY PRO KATEGORIE</Text>
+                  {categoryOverrideEntries.map(({ categoryId, dateKey }) => (
+                    <View key={`${categoryId}-${dateKey}`} style={s.closurePeriodRow}>
+                      <TouchableOpacity
+                        style={{ flex: 1 }}
+                        onPress={() => setEditCategoryOverride({ categoryId, dateKey })}
+                        activeOpacity={0.7}
+                      >
+                        <View style={s.exceptionTypeRow}>
+                          <Ionicons name="layers-outline" size={14} color="#6366F1" />
+                          <Text style={s.closurePeriodDates}>
+                            {fmtDateKey(dateKey)} · {getCategoryById(settings, categoryId)?.name}
+                          </Text>
+                        </View>
+                        <Text style={s.dayOverrideHours}>
+                          {formatDayHours(getDayHoursForCourt(
+                            getCategoryById(settings, categoryId)?.court_ids[0] ?? '',
+                            dateKey,
+                            settings,
+                          ))}
+                        </Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        onPress={() => tryClearCategoryDayOverride(categoryId, dateKey)}
+                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                      >
+                        <Ionicons name="trash-outline" size={18} color={W.red} />
+                      </TouchableOpacity>
+                    </View>
+                  ))}
+                </View>
+              )}
+              {dayOverrideKeys.length > 0 && (
+                <View style={s.closurePeriodList}>
+                  <Text style={s.openingLabel}>VÝJIMKY PROVOZNÍ DOBY</Text>
+                  {dayOverrideKeys.map(dateKey => (
+                    <View key={dateKey} style={s.closurePeriodRow}>
+                      <TouchableOpacity
+                        style={{ flex: 1 }}
+                        onPress={() => setEditDayOverrideKey(dateKey)}
+                        activeOpacity={0.7}
+                      >
+                        <View style={s.exceptionTypeRow}>
+                          <Ionicons name="time-outline" size={14} color={W.orange} />
+                          <Text style={s.closurePeriodDates}>{fmtDateKey(dateKey)}</Text>
+                        </View>
+                        <Text style={s.dayOverrideHours}>
+                          {formatDayHours(getDayHoursForDate(dateKey, settings))}
+                        </Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        onPress={() => tryClearDayOverride(dateKey)}
+                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                      >
+                        <Ionicons name="trash-outline" size={18} color={W.red} />
+                      </TouchableOpacity>
+                    </View>
+                  ))}
+                </View>
+              )}
               <TouchableOpacity
                 onPress={() => setClosureModalVisible(true)}
                 style={s.closureAddBtn}
                 activeOpacity={0.8}
               >
                 <Ionicons name="calendar-outline" size={16} color={W.orange} />
-                <Text style={s.closureAddBtnText}>Přidat termín uzavření</Text>
+                <Text style={s.closureAddBtnText}>Přidat uzavření nebo výjimku</Text>
               </TouchableOpacity>
             </>
           )}
         </View>
       </View>
 
-      <ClosureRangeModal
+      <ClosureExceptionModal
         visible={closureModalVisible}
+        settings={settings}
+        bookings={bookings}
         onClose={() => setClosureModalVisible(false)}
-        onAdd={addClosurePeriod}
+        onAddClosure={addClosurePeriod}
+        onApplyDayOverrides={applyDayOverrides}
+        onApplyCategoryDayOverrides={applyCategoryDayOverrides}
       />
+
+      {editDayOverrideKey && (
+        <DayHoursOverrideModal
+          visible={!!editDayOverrideKey}
+          dateKey={editDayOverrideKey}
+          settings={settings}
+          bookings={bookings}
+          onClose={() => setEditDayOverrideKey(null)}
+          onSave={(partial) => {
+            if (partial) setDayOverride(editDayOverrideKey, partial);
+            else clearDayOverride(editDayOverrideKey);
+          }}
+        />
+      )}
+
+      {editCategoryOverride && (
+        <DayHoursOverrideModal
+          visible
+          dateKey={editCategoryOverride.dateKey}
+          categoryId={editCategoryOverride.categoryId}
+          settings={settings}
+          bookings={bookings}
+          onClose={() => setEditCategoryOverride(null)}
+          onSave={(partial) => {
+            const { categoryId, dateKey } = editCategoryOverride;
+            if (partial) setCategoryDayOverride(categoryId, dateKey, partial);
+            else clearCategoryDayOverride(categoryId, dateKey);
+          }}
+        />
+      )}
+
+      <Text style={s.sectionTitle}>REZERVACE A ÚPRAVY HRÁČE</Text>
 
       {/* Editační zámek */}
       <View style={s.settingCard}>
@@ -2628,6 +3382,83 @@ function SettingsTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
                 style={[s.lockChip, settings.editLockHours === h && { backgroundColor: W.orange }]}>
                 <Text style={[s.lockChipText, settings.editLockHours === h && { color: '#fff' }]}>
                   {h === 0 ? 'Vždy' : `${h}h`}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
+      </View>
+
+      {/* Rezervace dopředu */}
+      <View style={s.settingCard}>
+        <View style={[s.settingCardBar, { backgroundColor: colors.success }]} />
+        <View style={s.settingCardBody}>
+          <Text style={s.settingCardTitle}>Rezervace dopředu</Text>
+          <Text style={s.settingCardSub}>
+            Hráč může rezervovat nejvýše{' '}
+            <Text style={{ fontWeight: '900' }}>{settings.maxBookingDaysAhead} dní</Text>
+            {' '}dopředu.
+          </Text>
+          <View style={s.stepperRow}>
+            <TouchableOpacity
+              onPress={() => updateSettings({ maxBookingDaysAhead: Math.max(1, settings.maxBookingDaysAhead - 1) })}
+              style={[s.stepperBtn, { backgroundColor: colors.success }]}>
+              <Text style={s.stepperBtnText}>−</Text>
+            </TouchableOpacity>
+            <Text style={s.stepperValue}>{settings.maxBookingDaysAhead} d</Text>
+            <TouchableOpacity
+              onPress={() => updateSettings({ maxBookingDaysAhead: Math.min(365, settings.maxBookingDaysAhead + 1) })}
+              style={[s.stepperBtn, { backgroundColor: colors.success }]}>
+              <Text style={s.stepperBtnText}>+</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+
+      {/* Minimální doba rezervace */}
+      <View style={s.settingCard}>
+        <View style={[s.settingCardBar, { backgroundColor: W.amber }]} />
+        <View style={s.settingCardBody}>
+          <Text style={s.settingCardTitle}>Minimální doba rezervace</Text>
+          <Text style={s.settingCardSub}>
+            Rezervace musí trvat alespoň{' '}
+            <Text style={{ fontWeight: '900' }}>{settings.minBookingDurationMinutes} min</Text>.
+          </Text>
+          <View style={s.stepperRow}>
+            <TouchableOpacity
+              onPress={() => {
+                const idx = MIN_DURATION_OPTIONS.indexOf(
+                  settings.minBookingDurationMinutes as typeof MIN_DURATION_OPTIONS[number],
+                );
+                const safeIdx = idx >= 0 ? idx : MIN_DURATION_OPTIONS.indexOf(60);
+                if (safeIdx > 0) updateSettings({ minBookingDurationMinutes: MIN_DURATION_OPTIONS[safeIdx - 1] });
+              }}
+              style={[s.stepperBtn, { backgroundColor: W.amber }]}>
+              <Text style={s.stepperBtnText}>−</Text>
+            </TouchableOpacity>
+            <Text style={s.stepperValue}>{settings.minBookingDurationMinutes} min</Text>
+            <TouchableOpacity
+              onPress={() => {
+                const idx = MIN_DURATION_OPTIONS.indexOf(
+                  settings.minBookingDurationMinutes as typeof MIN_DURATION_OPTIONS[number],
+                );
+                const safeIdx = idx >= 0 ? idx : MIN_DURATION_OPTIONS.indexOf(60);
+                if (safeIdx < MIN_DURATION_OPTIONS.length - 1) {
+                  updateSettings({ minBookingDurationMinutes: MIN_DURATION_OPTIONS[safeIdx + 1] });
+                }
+              }}
+              style={[s.stepperBtn, { backgroundColor: W.amber }]}>
+              <Text style={s.stepperBtnText}>+</Text>
+            </TouchableOpacity>
+          </View>
+          <View style={s.lockOptionsRow}>
+            {MIN_DURATION_OPTIONS.map(mins => (
+              <TouchableOpacity
+                key={mins}
+                onPress={() => updateSettings({ minBookingDurationMinutes: mins })}
+                style={[s.lockChip, settings.minBookingDurationMinutes === mins && { backgroundColor: W.amber }]}>
+                <Text style={[s.lockChipText, settings.minBookingDurationMinutes === mins && { color: '#fff' }]}>
+                  {mins}m
                 </Text>
               </TouchableOpacity>
             ))}
@@ -2740,109 +3571,201 @@ function SettingsTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
                 <Text style={s.seasonHint}>
                   Provozní dobu a ceník níže upravujete pro sezónu{' '}
                   <Text style={{ fontWeight: '900' }}>{SEASON_LABELS[settings.activeSeason]}</Text>.
-                  Sezónní nastavení jednotlivých kurtů najdete v záložce Kurty.
+                  Parametry kategorií nastavíte v sekci níže.
                 </Text>
+              )}
+
+              {(settings.seasons?.length ?? 0) > 0 && (
+                <>
+                  <Text style={[s.openingLabel, { marginTop: 12 }]}>KALENDÁŘNÍ SEZÓNY</Text>
+                  <Text style={s.settingCardSub}>
+                    Kurty v kategoriích přiřazených k sezóně nelze rezervovat, pokud je sezóna uzavřena.
+                  </Text>
+                  {settings.seasons.map(season => (
+                    <View key={season.id} style={s.calendarSeasonRow}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={s.closurePeriodDates}>{season.name}</Text>
+                        <Text style={s.dayOverrideHours}>{formatSeasonDates(season)}</Text>
+                        {season.is_closed && (
+                          <Text style={s.calendarSeasonClosedHint}>Sezóna uzavřena</Text>
+                        )}
+                      </View>
+                      <View style={s.calendarSeasonSwitch}>
+                        <Text style={s.calendarSeasonSwitchLabel}>Zavřeno</Text>
+                        <Switch
+                          value={season.is_closed === true}
+                          onValueChange={(v) => trySetSeasonClosed(season.id, v)}
+                          trackColor={{ false: colors.border, true: W.red }}
+                          thumbColor="#fff"
+                        />
+                      </View>
+                    </View>
+                  ))}
+                </>
               )}
             </>
           )}
         </View>
       </View>
 
-      {/* Provozní doba */}
+      {/* Provoz a ceník kategorií */}
       <View style={s.settingCard}>
-        <View style={[s.settingCardBar, { backgroundColor: W.amber }]} />
+        <View style={[s.settingCardBar, { backgroundColor: '#6366F1' }]} />
         <View style={s.settingCardBody}>
-          <Text style={s.settingCardTitle}>Provozní doba</Text>
+          <Text style={s.settingCardTitle}>Provoz a ceník kategorií</Text>
           <Text style={s.settingCardSub}>
-            {settings.seasonalModeEnabled
-              ? `Profil ${SEASON_LABELS[settings.activeSeason]} · ` : ''}
-            Výchozí: {formatDayHours(settings.openingSchedule.default)}
+            Parametry nastavujete pro kategorie — kurty v nich dědí provozní dobu a ceník.
+            Globální výchozí rozvrh platí jako fallback.
+          </Text>
+
+          {settings.seasonalModeEnabled && (settings.seasons?.length ?? 0) > 0 && (
+            <>
+              <Text style={s.openingLabel}>FILTR SEZÓNY</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.seasonFilterScroll}>
+                <TouchableOpacity
+                  onPress={() => setSeasonFilter(null)}
+                  style={[s.seasonFilterChip, seasonFilter === null && s.seasonFilterChipActive]}
+                >
+                  <Text style={[s.seasonFilterText, seasonFilter === null && s.seasonFilterTextActive]}>
+                    Všechny
+                  </Text>
+                </TouchableOpacity>
+                {settings.seasons.map(season => {
+                  const sel = seasonFilter === season.id;
+                  const closed = isSeasonClosed(season);
+                  return (
+                    <TouchableOpacity
+                      key={season.id}
+                      onPress={() => setSeasonFilter(season.id)}
+                      style={[
+                        s.seasonFilterChip,
+                        sel && s.seasonFilterChipActive,
+                        closed && s.seasonFilterChipClosed,
+                      ]}
+                    >
+                      <Text style={[
+                        s.seasonFilterText,
+                        sel && s.seasonFilterTextActive,
+                        closed && !sel && s.seasonFilterTextClosed,
+                      ]}>
+                        {season.name}{closed ? ' · ZAVŘENO' : ''}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+            </>
+          )}
+
+          <Text style={s.openingLabel}>GLOBÁLNÍ VÝCHOZÍ PROVOZ</Text>
+          <Text style={s.settingCardSub}>
+            {formatDayHours(settings.openingSchedule.default)}
             {settings.openingSchedule.weekday
-              ? `\nPracovní dny: ${formatDayHours(settings.openingSchedule.weekday)}` : ''}
+              ? ` · Po–Pá: ${formatDayHours(settings.openingSchedule.weekday)}` : ''}
             {settings.openingSchedule.weekend
-              ? `\nVíkend: ${formatDayHours(settings.openingSchedule.weekend)}` : ''}
-            {'\n'}Svátky: {holidayTreatmentLabel(settings.holidayTreatment)}
+              ? ` · So–Ne: ${formatDayHours(settings.openingSchedule.weekend)}` : ''}
           </Text>
           <TouchableOpacity
-            onPress={() => setOpeningModalVisible(true)}
+            onPress={() => { setOpeningCategoryId(null); setOpeningModalVisible(true); }}
             style={s.closureAddBtn}
             activeOpacity={0.8}
           >
             <Ionicons name="time-outline" size={16} color={W.amber} />
             <Text style={[s.closureAddBtnText, { color: W.amber }]}>Upravit provozní dobu</Text>
           </TouchableOpacity>
-        </View>
-      </View>
 
-      {/* Cenové kategorie */}
-      <View style={s.settingCard}>
-        <View style={[s.settingCardBar, { backgroundColor: W.orange }]} />
-        <View style={s.settingCardBody}>
-          <Text style={s.settingCardTitle}>Cenové kategorie</Text>
-          <Text style={s.settingCardSub}>
-            {settings.seasonalModeEnabled && !settings.autoSeasonByDate
-              ? `Profil ${SEASON_LABELS[settings.activeSeason]} · `
-              : settings.seasonalModeEnabled && settings.autoSeasonByDate
-                ? `Dnes ${SEASON_LABELS[getEffectiveSeasonId(todayKey, settings)]} · `
-                : ''}
-            {settings.pricing.rules.length > 0
-              ? `${settings.pricing.rules.length} aktivních pravidel pro kurty`
-              : 'Nastavte ceny podle dnů a časových pásem'}
-          </Text>
+          {settings.seasonalModeEnabled && selectedFilterSeason && (
+            <Text style={[s.seasonHint, { marginTop: 8, color: colors.textSecondary }]}>
+              Upravujete provozní dobu pro sezónu: {selectedFilterSeason.name}
+            </Text>
+          )}
 
-          {settings.seasonalModeEnabled && !settings.autoSeasonByDate && (
+          {filteredCategories.length > 0 && (
             <>
-              <Text style={s.openingLabel}>SEZÓNA CENÍKU</Text>
-              <View style={s.seasonRow}>
-                {SEASON_IDS.map(id => {
-                  const active = settings.activeSeason === id;
-                  return (
-                    <TouchableOpacity
-                      key={id}
-                      onPress={() => updateSettings(patchForSwitchSeason(settings, id))}
-                      activeOpacity={0.85}
-                      style={[s.seasonChip, active && s.seasonChipActive]}
-                    >
-                      <Ionicons
-                        name={id === 'summer' ? 'sunny' : 'snow'}
-                        size={20}
-                        color={active ? '#fff' : (id === 'summer' ? '#F59E0B' : '#6366F1')}
-                      />
-                      <Text style={[s.seasonChipTitle, active && s.seasonChipTitleActive]}>
-                        {SEASON_LABELS[id]}
+              <Text style={[s.openingLabel, { marginTop: 12 }]}>KATEGORIE</Text>
+              {filteredCategories.map(cat => {
+                const catCourts = courtsInCategory(courts, cat.id, settings);
+                const hasCustomSchedule = !!settings.categoryOpeningSchedule?.[cat.id];
+                const schedule = getCategoryOpeningSchedule(settings, cat.id);
+                const pricingRules = settings.categoryPricing?.[cat.id]?.rules.length ?? 0;
+                const seasonName = getCategorySeasonLabel(settings, cat.season_id);
+                return (
+                  <View key={cat.id} style={s.categorySettingsRow}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={s.closurePeriodDates}>{cat.name}</Text>
+                      <Text style={s.dayOverrideHours}>
+                        {catCourts.length} {catCourts.length === 1 ? 'kurt' : catCourts.length < 5 ? 'kurty' : 'kurtů'}
+                        {seasonName ? ` · ${seasonName}` : ''}
                       </Text>
-                      {active && (
-                        <Text style={s.seasonChipActiveLabel}>AKTIVNÍ</Text>
-                      )}
+                      <Text style={s.dayOverrideHours}>
+                        Provoz: {hasCustomSchedule
+                          ? formatDayHours(schedule.default)
+                          : 'Globální výchozí'}
+                        {' · '}Ceník: {pricingRules > 0 ? `${pricingRules} pravidel` : 'Nenastaveno'}
+                      </Text>
+                    </View>
+                    <TouchableOpacity
+                      onPress={() => { setOpeningCategoryId(cat.id); setOpeningModalVisible(true); }}
+                      style={s.categorySettingsBtn}
+                    >
+                      <Ionicons name="time-outline" size={18} color={W.amber} />
                     </TouchableOpacity>
-                  );
-                })}
-              </View>
+                    <TouchableOpacity
+                      onPress={() => { setPricingCategoryId(cat.id); setPricingModalVisible(true); }}
+                      style={s.categorySettingsBtn}
+                    >
+                      <Ionicons name="pricetag-outline" size={18} color={W.orange} />
+                    </TouchableOpacity>
+                  </View>
+                );
+              })}
             </>
           )}
 
-          <TouchableOpacity
-            onPress={() => setPricingModalVisible(true)}
-            style={s.closureAddBtn}
-            activeOpacity={0.8}
-          >
-            <Ionicons name="pricetag-outline" size={16} color={W.orange} />
-            <Text style={s.closureAddBtnText}>Nastavit ceník</Text>
-          </TouchableOpacity>
+          {settings.seasonalModeEnabled && filteredCategories.length === 0 && settings.categories.length > 0 && (
+            <Text style={s.emptyCategoryHint}>Pro zvolenou sezónu nejsou žádné kategorie.</Text>
+          )}
+
+          {settings.categories.length === 0 && (
+            <Text style={s.emptyCategoryHint}>
+              Zatím nemáte kategorie — vytvořte je v záložce Kurty.
+            </Text>
+          )}
+
+          {uncategorized.length > 0 && (
+            <View style={s.uncategorizedWarning}>
+              <Ionicons name="warning-outline" size={16} color={W.amber} />
+              <View style={{ flex: 1 }}>
+                <Text style={s.uncategorizedWarningTitle}>Nezařazené kurty</Text>
+                <Text style={s.uncategorizedWarningText}>
+                  {uncategorized.map(c => c.name).join(', ')} — používají globální nastavení.
+                  Přiřaďte kategorii v záložce Kurty.
+                </Text>
+              </View>
+            </View>
+          )}
         </View>
       </View>
 
       <OpeningHoursModal
         visible={openingModalVisible}
         settings={settings}
-        onClose={() => setOpeningModalVisible(false)}
+        categoryId={openingCategoryId ?? undefined}
+        categoryName={openingCategoryId ? getCategoryById(settings, openingCategoryId)?.name : undefined}
+        onClose={() => { setOpeningModalVisible(false); setOpeningCategoryId(null); }}
         onSave={(schedule, holidayTreatment) => {
-          updateSettings({
-            openingSchedule: schedule,
-            holidayTreatment,
-            openingSlot: schedule.default.openingSlot,
-            closingSlot: schedule.default.closingSlot,
-          });
+          if (openingCategoryId) {
+            updateCategoryOpeningSchedule(openingCategoryId, schedule);
+          } else {
+            updateSettings({
+              openingSchedule: schedule,
+              holidayTreatment,
+              openingSlot: schedule.default.openingSlot,
+              closingSlot: schedule.default.closingSlot,
+            });
+          }
+          setOpeningModalVisible(false);
+          setOpeningCategoryId(null);
         }}
       />
 
@@ -2850,35 +3773,12 @@ function SettingsTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
         visible={pricingModalVisible}
         courts={courts}
         settings={settings}
-        onClose={() => setPricingModalVisible(false)}
+        initialCategoryId={pricingCategoryId ?? undefined}
+        categoryOnly
+        onClose={() => { setPricingModalVisible(false); setPricingCategoryId(null); }}
         onSave={(pricing) => updateSettings({ pricing })}
+        onSaveCategory={updateCategoryPricing}
       />
-
-      {/* Rezervace dopředu */}
-      <View style={s.settingCard}>
-        <View style={[s.settingCardBar, { backgroundColor: colors.success }]} />
-        <View style={s.settingCardBody}>
-          <Text style={s.settingCardTitle}>Rezervace dopředu</Text>
-          <Text style={s.settingCardSub}>
-            Hráč může rezervovat nejvýše{' '}
-            <Text style={{ fontWeight: '900' }}>{settings.maxBookingDaysAhead} dní</Text>
-            {' '}dopředu.
-          </Text>
-          <View style={s.stepperRow}>
-            <TouchableOpacity
-              onPress={() => updateSettings({ maxBookingDaysAhead: Math.max(1, settings.maxBookingDaysAhead - 1) })}
-              style={[s.stepperBtn, { backgroundColor: colors.success }]}>
-              <Text style={s.stepperBtnText}>−</Text>
-            </TouchableOpacity>
-            <Text style={s.stepperValue}>{settings.maxBookingDaysAhead} d</Text>
-            <TouchableOpacity
-              onPress={() => updateSettings({ maxBookingDaysAhead: Math.min(365, settings.maxBookingDaysAhead + 1) })}
-              style={[s.stepperBtn, { backgroundColor: colors.success }]}>
-              <Text style={s.stepperBtnText}>+</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </View>
 
       <View style={{ height: 32 }} />
     </ScrollView>
@@ -2917,6 +3817,31 @@ const s = StyleSheet.create({
     position: 'absolute', top: 4, right: 4,
     width: 6, height: 6, borderRadius: 3, backgroundColor: W.amber,
   },
+  overrideDot: {
+    position: 'absolute', bottom: 4, left: 4,
+    width: 6, height: 6, borderRadius: 3, backgroundColor: W.orange,
+  },
+  overrideDotActive: { backgroundColor: '#fff' },
+  dayHoursBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    backgroundColor: colors.surface,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+    gap: 8,
+  },
+  dayHoursInfo: { flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1 },
+  dayHoursText: { fontSize: 13, fontWeight: '800', color: colors.textPrimary },
+  dayHoursBadge: {
+    backgroundColor: 'rgba(249,115,22,0.15)',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  dayHoursBadgeText: { fontSize: 8, fontWeight: '900', color: W.orange, letterSpacing: 0.8 },
+  exceptionTypeRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  dayOverrideHours: { fontSize: 12, color: colors.textMuted, marginTop: 2, marginLeft: 20 },
   dayChipWD:    { fontSize: 9,  fontWeight: '800', color: colors.textMuted, letterSpacing: 1 },
   dayChipNum:   { fontSize: 17, fontWeight: '900', color: colors.textPrimary, lineHeight: 22 },
   dayChipMonth: { fontSize: 9,  color: colors.textMuted },
@@ -2934,7 +3859,12 @@ const s = StyleSheet.create({
   // Pevný sloupec s kurty
   courtNamesCol: { width: COL_W, backgroundColor: colors.surface, borderRightWidth: 1, borderRightColor: colors.border, zIndex: 5 },
   cornerCell: { height: HEADER_H, borderBottomWidth: 1, borderBottomColor: colors.border },
-  courtNameCell: { height: ROW_H, justifyContent: 'center', paddingLeft: 8, paddingRight: 4, borderBottomWidth: 1, borderBottomColor: colors.border, borderLeftWidth: 3, borderLeftColor: 'transparent' },
+  courtNameCell: {
+    height: ROW_H, flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingLeft: 6, paddingRight: 4, borderBottomWidth: 1, borderBottomColor: colors.border,
+    borderLeftWidth: 3, borderLeftColor: 'transparent',
+  },
+  courtCategoryDot: { width: 8, height: 8, borderRadius: 4, flexShrink: 0 },
   courtNameText: { fontSize: 12, fontWeight: '800', color: colors.textPrimary },
   courtSportText: { fontSize: 10, color: colors.textMuted, marginTop: 2 },
 
@@ -2995,6 +3925,37 @@ const s = StyleSheet.create({
   holidayBannerTitle: { fontSize: 13, fontWeight: '900', color: '#B45309' },
   holidayBannerText: { fontSize: 12, color: colors.textSecondary, lineHeight: 18 },
 
+  seasonFilterBanner: {
+    flexDirection: 'row', alignItems: 'flex-start', gap: 10,
+    paddingHorizontal: 14, paddingVertical: 12,
+    backgroundColor: '#FFFBEB', borderBottomWidth: 1, borderBottomColor: '#FDE68A',
+  },
+  seasonFilterBannerTitle: { fontSize: 13, fontWeight: '900', color: '#B45309' },
+  seasonFilterBannerText: { fontSize: 12, color: colors.textSecondary, lineHeight: 18 },
+
+  seasonClosedBanner: {
+    flexDirection: 'row', alignItems: 'flex-start', gap: 10,
+    paddingHorizontal: 14, paddingVertical: 12,
+    backgroundColor: '#FEF2F2', borderBottomWidth: 1, borderBottomColor: '#FECACA',
+  },
+  seasonClosedBannerTitle: { fontSize: 13, fontWeight: '900', color: W.red },
+  seasonClosedBannerText: { fontSize: 12, color: colors.textSecondary, lineHeight: 18 },
+
+  calendarSeasonRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: colors.border,
+  },
+  calendarSeasonSwitch: { alignItems: 'center', gap: 4 },
+  calendarSeasonSwitchLabel: { fontSize: 9, fontWeight: '800', color: colors.textMuted, letterSpacing: 0.8 },
+  calendarSeasonClosedHint: { fontSize: 11, fontWeight: '800', color: W.red, marginTop: 4 },
+
+  categoryTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
+  closedSeasonBadge: {
+    backgroundColor: '#FEE2E2', paddingHorizontal: 6, paddingVertical: 2,
+    borderWidth: 1, borderColor: '#FECACA',
+  },
+  closedSeasonBadgeText: { fontSize: 8, fontWeight: '900', color: W.red, letterSpacing: 0.8 },
+
   seasonHint: {
     fontSize: 11, color: colors.textMuted, lineHeight: 17, marginTop: 4,
   },
@@ -3054,6 +4015,15 @@ const s = StyleSheet.create({
     borderWidth: 1.5, borderColor: W.orange, alignSelf: 'flex-start',
   },
   closureAddBtnText: { fontSize: 12, fontWeight: '800', color: W.orange, letterSpacing: 0.5 },
+  courtClosureSection: {
+    marginTop: 20,
+    paddingTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+    gap: 8,
+  },
+  courtClosureHint: { fontSize: 12, color: colors.textMuted, lineHeight: 18 },
+  courtClosureNote: { fontSize: 12, color: colors.textMuted, marginTop: 4, lineHeight: 16 },
   closureNoteInput: {
     marginTop: 12, minHeight: 56, padding: 12,
     backgroundColor: colors.bgAlt, borderWidth: 1, borderColor: colors.border,
@@ -3090,7 +4060,7 @@ const s = StyleSheet.create({
     paddingHorizontal: 6,
     paddingVertical: 5,
   },
-  bookingTextCol: { minWidth: 0 },
+  bookingTextCol: { flex: 1, minWidth: 0 },
   bookingName:  { fontSize: 11, fontWeight: '800', color: '#fff', lineHeight: 15 },
   bookingMeta:  { fontSize: 9,  color: 'rgba(255,255,255,0.85)', marginTop: 1 },
   unpaidAlertIconWrap: {
@@ -3120,7 +4090,15 @@ const s = StyleSheet.create({
     color: '#fff',
     whiteSpace: 'nowrap',
   },
-  noteIconBtn:  { position: 'absolute', top: 3, right: 3, zIndex: 10 },
+  bookingIconsCol: {
+    position: 'absolute',
+    top: 3,
+    right: 3,
+    zIndex: 10,
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: 4,
+  },
 
   // Linka aktuálního času
   nowLine:       { position: 'absolute', top: 0, bottom: 0, width: 2, backgroundColor: '#EF4444', zIndex: 15, shadowColor: '#EF4444', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.6, shadowRadius: 3 },
@@ -3128,6 +4106,28 @@ const s = StyleSheet.create({
   nowBubbleText: { fontSize: 9, fontWeight: '900', color: '#fff', letterSpacing: 0.5 },
 
   dragHint: { fontSize: 10, color: colors.textDisabled, textAlign: 'center', paddingVertical: 6, fontStyle: 'italic' },
+  reorderHint: {
+    fontSize: 10, color: colors.textDisabled, fontStyle: 'italic',
+    paddingHorizontal: 16, paddingBottom: 10,
+  },
+  dragHandle: { paddingVertical: 4, paddingRight: 6 },
+  dragHandleCourt: { paddingHorizontal: 8, paddingVertical: 14, justifyContent: 'center' },
+  draggingBlock: {
+    opacity: 0.92,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.14,
+    shadowRadius: 8,
+    elevation: 6,
+  },
+  draggingRow: {
+    opacity: 0.88,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.12,
+    shadowRadius: 4,
+    elevation: 4,
+  },
 
   // Správa kurtů
   courtList: { paddingBottom: 24 },
@@ -3139,6 +4139,95 @@ const s = StyleSheet.create({
   courtRowMeta: { fontSize: 12, color: colors.textSecondary },
   courtRowClub: { fontSize: 11, color: colors.textMuted },
   editIconBtn: { padding: 16 },
+  courtsTabHeader: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingRight: 16,
+  },
+  courtsTabHeaderActions: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  addCourtBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    paddingHorizontal: 10, paddingVertical: 6,
+    borderWidth: 1, borderColor: W.orange, backgroundColor: 'rgba(249,115,22,0.08)',
+  },
+  addCourtBtnText: { fontSize: 10, fontWeight: '800', color: W.orange, letterSpacing: 0.5 },
+  addCategoryBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    paddingHorizontal: 10, paddingVertical: 6,
+    borderWidth: 1, borderColor: '#6366F1', backgroundColor: 'rgba(99,102,241,0.08)',
+  },
+  addCategoryBtnText: { fontSize: 10, fontWeight: '800', color: '#6366F1', letterSpacing: 0.5 },
+  courtsTabHint: {
+    fontSize: 12, color: colors.textMuted, lineHeight: 18,
+    paddingHorizontal: 16, paddingBottom: 8,
+  },
+  categoryBlock: { marginBottom: 12 },
+  categoryHeader: { flexDirection: 'row', backgroundColor: colors.surface, marginBottom: 2 },
+  categoryHeaderBar: { width: 4 },
+  categoryHeaderBody: {
+    flex: 1, flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: 14, paddingVertical: 12, gap: 4,
+  },
+  categoryTitle: { fontSize: 14, fontWeight: '900', color: colors.textPrimary },
+  categoryMeta: { fontSize: 11, color: colors.textMuted, marginTop: 2 },
+  categoryActionBtn: { padding: 8 },
+  emptyCategoryHint: {
+    fontSize: 12, color: colors.textMuted, fontStyle: 'italic',
+    paddingHorizontal: 16, paddingVertical: 8,
+  },
+  assignOverlay: {
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center', padding: 24,
+  },
+  assignSheet: {
+    backgroundColor: colors.surface, padding: 20,
+    borderWidth: 1, borderColor: colors.border,
+  },
+  assignTitle: { fontSize: 12, fontWeight: '900', color: colors.textPrimary, letterSpacing: 1 },
+  assignSub: { fontSize: 14, fontWeight: '800', color: colors.textPrimary, marginTop: 4, marginBottom: 12 },
+  assignEmpty: { fontSize: 12, color: colors.textMuted, marginBottom: 12 },
+  assignRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    paddingVertical: 12, paddingHorizontal: 12, marginBottom: 6,
+    borderWidth: 1, borderColor: colors.border, backgroundColor: colors.bgAlt,
+  },
+  assignColorDot: { width: 10, height: 10, borderRadius: 5, flexShrink: 0 },
+  assignRowName: { fontSize: 13, fontWeight: '800', color: colors.textPrimary },
+  assignRowMeta: { fontSize: 11, color: colors.textMuted, marginTop: 2 },
+  assignCancel: { marginTop: 8, alignItems: 'center', paddingVertical: 10 },
+  assignCancelText: { fontSize: 12, fontWeight: '700', color: colors.textMuted },
+  uncategorizedBanner: {
+    flexDirection: 'row', gap: 8, alignItems: 'flex-start',
+    padding: 10, marginBottom: 8, backgroundColor: 'rgba(99,102,241,0.08)',
+    borderWidth: 1, borderColor: 'rgba(99,102,241,0.25)',
+  },
+  uncategorizedBannerText: { flex: 1, fontSize: 11, color: colors.textSecondary, lineHeight: 16 },
+  courtCreateCategoryHint: {
+    fontSize: 11, color: colors.textMuted, lineHeight: 16, marginBottom: 8,
+  },
+  fieldInputError: { borderColor: W.red },
+  saveBtnDisabled: { opacity: 0.45 },
+  seasonFilterScroll: { marginBottom: 8 },
+  seasonFilterChip: {
+    paddingHorizontal: 12, paddingVertical: 8, marginRight: 8,
+    borderWidth: 1, borderColor: colors.border, backgroundColor: colors.bgAlt,
+  },
+  seasonFilterChipActive: { borderColor: '#6366F1', backgroundColor: 'rgba(99,102,241,0.1)' },
+  seasonFilterChipClosed: { borderColor: '#FECACA', backgroundColor: '#FEF2F2' },
+  seasonFilterText: { fontSize: 11, fontWeight: '800', color: colors.textSecondary },
+  seasonFilterTextActive: { color: '#6366F1' },
+  seasonFilterTextClosed: { color: W.red },
+  categorySettingsRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: colors.border,
+  },
+  categorySettingsBtn: { padding: 10 },
+  uncategorizedWarning: {
+    flexDirection: 'row', gap: 8, alignItems: 'flex-start',
+    marginTop: 12, padding: 10, backgroundColor: '#FFFBEB',
+    borderWidth: 1, borderColor: '#FDE68A',
+  },
+  uncategorizedWarningTitle: { fontSize: 12, fontWeight: '800', color: colors.textPrimary },
+  uncategorizedWarningText: { fontSize: 11, color: colors.textSecondary, marginTop: 2, lineHeight: 16 },
 
   // Modal editace kurtu
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'flex-end' },
@@ -3243,6 +4332,19 @@ const s = StyleSheet.create({
   },
   detailNoteText: { flex: 1, fontSize: 13, color: colors.textSecondary, lineHeight: 19, fontStyle: 'italic' },
   detailCancelBtn: { flexDirection: 'row', alignItems: 'center', gap: 8, margin: 16, marginTop: 20, padding: 14, borderWidth: 1, borderColor: colors.error },
+  detailUndoSection: { marginHorizontal: 16, marginTop: 16, gap: 8 },
+  detailUndoBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    padding: 14, borderWidth: 1, borderColor: W.orange,
+    backgroundColor: 'rgba(234,88,12,0.08)',
+  },
+  detailUndoTitle: { fontSize: 14, fontWeight: '800', color: W.orange },
+  detailUndoSub: { fontSize: 12, color: colors.textMuted, lineHeight: 16 },
+  undoHintBadge: {
+    width: 16, height: 16, borderRadius: 8,
+    backgroundColor: 'rgba(0,0,0,0.35)',
+    alignItems: 'center', justifyContent: 'center',
+  },
   detailCancelText: { fontSize: 13, fontWeight: '700', color: colors.error },
   detailConfirmCancel: { margin: 16, marginTop: 20, padding: 16, backgroundColor: '#FEE2E2', gap: 12 },
   detailConfirmText: { fontSize: 14, fontWeight: '700', color: colors.error },
@@ -3383,6 +4485,18 @@ const cal = StyleSheet.create({
   },
   todayDotSel: {
     backgroundColor: W.orange,
+  },
+  overrideDot: {
+    position: 'absolute',
+    top: 4,
+    right: 4,
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
+    backgroundColor: W.orange,
+  },
+  overrideDotSel: {
+    backgroundColor: '#fff',
   },
   footer: {
     alignItems: 'center',

@@ -32,6 +32,27 @@ export interface Club {
 export type CourtSurface = 'clay' | 'hard' | 'grass' | 'carpet' | 'indoor';
 export type SportType = 'tennis' | 'badminton' | 'squash' | 'padel' | 'volleyball' | 'basketball' | 'football';
 
+/** Kalendářní sezóna klubu (např. letní/zimní období) */
+export interface Season {
+  id: string;
+  name: string;
+  start_date: string;
+  end_date: string;
+  /** Celá sezóna uzavřena — kurty v kategoriích této sezóny nelze rezervovat v jejím období */
+  is_closed?: boolean;
+}
+
+/** Seskupení kurtů — společná provozní doba a ceník */
+export interface CourtCategory {
+  id: string;
+  name: string;
+  court_ids: string[];
+  /** Barva kategorie — hex nebo id z CATEGORY_COLORS */
+  color: string;
+  /** Sezóna, pro kterou kategorie platí */
+  season_id?: string;
+}
+
 export interface Court {
   id: string;
   club_id: string;
@@ -42,6 +63,7 @@ export interface Court {
   is_active: boolean;
   price_per_hour: number;
   capacity: number;       // max hráčů
+  category_id?: string;
   description?: string | null;
   created_at: string;
 }
@@ -101,6 +123,12 @@ export interface ClubClosurePeriod {
   id: string;
   fromDate: string;   // YYYY-MM-DD
   toDate: string;     // YYYY-MM-DD
+  /** Bez categoryId/courtId = celý klub; s categoryId = jen kurty v kategorii; s courtId = jeden kurt */
+  categoryId?: string;
+  courtId?: string;
+  /** Částečné uzavření kurtu — slot indexy 0–47 (30 min); oba musí být nastaveny */
+  closedFromSlot?: number;
+  closedToSlot?: number;
   note?: string;
 }
 
@@ -108,6 +136,12 @@ export interface ClubClosurePeriod {
 export interface DayHours {
   openingSlot: number;
   closingSlot: number;
+}
+
+/** Částečný override provozní doby pro konkrétní kalendářní den (YYYY-MM-DD) */
+export interface DayHoursPartialOverride {
+  openingSlot?: number;
+  closingSlot?: number;
 }
 
 /** 0 = pondělí … 6 = neděle */
@@ -140,10 +174,11 @@ export interface PriceTimeBand {
   pricePerHour: number;
 }
 
-/** Cenové pravidlo pro kurt — platí pro zvolený rozsah dnů a časová pásma */
+/** Cenové pravidlo — platí pro kurt nebo celou kategorii kurtů */
 export interface CourtPriceRule {
   id: string;
-  courtId: string;
+  courtId?: string;
+  categoryId?: string;
   scope: PriceDayScope;
   bands: PriceTimeBand[];
 }
@@ -186,6 +221,8 @@ export interface ClubSettings {
   openingSlot: number;
   closingSlot: number;
   maxBookingDaysAhead: number;
+  /** Minimální délka rezervace v minutách (30, 60, 90, 120, 150, 180) */
+  minBookingDurationMinutes: number;
   earlyCloseEnabled: boolean;
   earlyCloseSlot: number;
   earlyCloseNote?: string;
@@ -200,6 +237,20 @@ export interface ClubSettings {
   seasonPeriods: { summer: SeasonPeriod; winter: SeasonPeriod };
   seasonPresets: SeasonPresets;
   courtSeasonSettings: Record<string, CourtSeasonSettings>;
+  /** Admin override provozní doby pro jednotlivé dny — klíč YYYY-MM-DD */
+  dayOverrides?: Record<string, DayHoursPartialOverride>;
+  /** Kalendářní sezóny klubu */
+  seasons: Season[];
+  /** Seskupení kurtů pro hromadné nastavení provozu a ceníku */
+  categories: CourtCategory[];
+  /** Vlastní rozvrh otevírací doby per kategorie (fallback = globální openingSchedule) */
+  categoryOpeningSchedule?: Record<string, OpeningSchedule>;
+  /** Denní výjimky provozní doby per kategorie — categoryId → dateKey → override */
+  categoryDayOverrides?: Record<string, Record<string, DayHoursPartialOverride>>;
+  /** Ceník per kategorie — pravidla s categoryId se aplikují na všechny kurty v kategorii */
+  categoryPricing?: Record<string, ClubPricing>;
+  /** Pořadí nezařazených kurtů (category order = pořadí v categories[], court order = court_ids[]) */
+  uncategorizedCourtOrder?: string[];
 }
 
 export type MatchStatus = 'scheduled' | 'in_progress' | 'completed' | 'cancelled';

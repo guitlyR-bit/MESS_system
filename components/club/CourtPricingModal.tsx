@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import {
   View, Text, Modal, ScrollView, TouchableOpacity,
   StyleSheet, TextInput,
@@ -13,6 +13,7 @@ import { slotToTime, slotEndTime, SLOT_COUNT } from '@/lib/mockData';
 import {
   scopeLabel, upsertPriceRule, removePriceRule,
 } from '@/lib/clubSchedule';
+import { courtsInCategory, getCategoryById } from '@/lib/clubCategories';
 
 const W = colors.warm;
 
@@ -38,23 +39,41 @@ export function CourtPricingModal({
   courts,
   settings,
   initialCourtId,
+  initialCategoryId,
+  categoryOnly,
   onSave,
+  onSaveCategory,
   onClose,
 }: {
   visible: boolean;
   courts: CourtWithClub[];
   settings: ClubSettings;
   initialCourtId?: string;
+  initialCategoryId?: string;
+  /** Skrýt režim jednotlivého kurtu — jen kategorie */
+  categoryOnly?: boolean;
   onSave: (pricing: ClubPricing) => void;
+  onSaveCategory?: (categoryId: string, pricing: ClubPricing) => void;
   onClose: () => void;
 }) {
+  const [mode, setMode] = useState<'category' | 'court'>(categoryOnly ? 'category' : 'category');
   const [pricing, setPricing] = useState<ClubPricing>(settings.pricing);
+  const [categoryPricing, setCategoryPricing] = useState<Record<string, ClubPricing>>(
+    settings.categoryPricing ?? {},
+  );
   const [courtId, setCourtId] = useState(initialCourtId ?? courts[0]?.id ?? '');
+  const [categoryId, setCategoryId] = useState(
+    initialCategoryId ?? settings.categories[0]?.id ?? '',
+  );
   const [editScope, setEditScope] = useState<PriceDayScope | null>(null);
   const [bands, setBands] = useState<PriceTimeBand[]>([]);
 
   const court = courts.find(c => c.id === courtId);
-  const accent = court ? (SPORT_COLORS[court.sport] ?? W.orange) : W.orange;
+  const category = getCategoryById(settings, categoryId);
+  const categoryCourts = categoryId ? courtsInCategory(courts, categoryId, settings) : [];
+  const accent = mode === 'category'
+    ? '#6366F1'
+    : (court ? (SPORT_COLORS[court.sport] ?? W.orange) : W.orange);
   const dayHours = settings.openingSchedule.default;
 
   useEffect(() => {
@@ -65,37 +84,83 @@ export function CourtPricingModal({
           bands: r.bands.map(b => ({ ...b })),
         })),
       });
+      setCategoryPricing(
+        Object.fromEntries(
+          Object.entries(settings.categoryPricing ?? {}).map(([k, p]) => [
+            k,
+            { rules: p.rules.map(r => ({ ...r, bands: r.bands.map(b => ({ ...b })) })) },
+          ]),
+        ),
+      );
       setCourtId(initialCourtId ?? courts[0]?.id ?? '');
+      setCategoryId(initialCategoryId ?? settings.categories[0]?.id ?? '');
+      setMode(categoryOnly || (initialCategoryId && !initialCourtId) ? 'category' : (initialCourtId && !initialCategoryId ? 'court' : 'category'));
       setEditScope(null);
     }
-  }, [visible, settings, initialCourtId, courts]);
+  }, [visible, settings, initialCourtId, initialCategoryId, categoryOnly, courts]);
 
-  const courtRules = pricing.rules.filter(r => r.courtId === courtId);
+  const activePricing = mode === 'category'
+    ? (categoryPricing[categoryId] ?? { rules: [] })
+    : pricing;
+  const targetRules = mode === 'category'
+    ? activePricing.rules.filter(r => r.categoryId === categoryId)
+    : activePricing.rules.filter(r => r.courtId === courtId);
+
+  const basePrice = useMemo(() => {
+    if (mode === 'category' && categoryCourts.length > 0) {
+      return categoryCourts[0].price_per_hour;
+    }
+    return court?.price_per_hour ?? 200;
+  }, [mode, categoryCourts, court]);
 
   function startEdit(scope: PriceDayScope) {
-    const existing = courtRules.find(r => r.scope === scope);
-    const base = court?.price_per_hour ?? 200;
+    const existing = targetRules.find(r => r.scope === scope);
     setEditScope(scope);
     setBands(
       existing?.bands.map(b => ({ ...b }))
-        ?? defaultBands(base, dayHours.openingSlot, dayHours.closingSlot),
+        ?? defaultBands(basePrice, dayHours.openingSlot, dayHours.closingSlot),
     );
   }
 
   function saveRule() {
-    if (!courtId || editScope === null) return;
-    const rule: CourtPriceRule = {
-      id: `pr_${courtId}_${editScope}_${Date.now()}`,
-      courtId,
-      scope: editScope,
-      bands: bands.map(b => ({ ...b })),
-    };
-    setPricing(p => ({ rules: upsertPriceRule(p.rules, rule) }));
+    if (editScope === null) return;
+    if (mode === 'category') {
+      if (!categoryId) return;
+      const rule: CourtPriceRule = {
+        id: `pr_cat_${categoryId}_${editScope}_${Date.now()}`,
+        categoryId,
+        scope: editScope,
+        bands: bands.map(b => ({ ...b })),
+      };
+      const nextRules = upsertPriceRule(activePricing.rules, rule);
+      setCategoryPricing(prev => ({
+        ...prev,
+        [categoryId]: { rules: nextRules },
+      }));
+    } else {
+      if (!courtId) return;
+      const rule: CourtPriceRule = {
+        id: `pr_${courtId}_${editScope}_${Date.now()}`,
+        courtId,
+        scope: editScope,
+        bands: bands.map(b => ({ ...b })),
+      };
+      setPricing(p => ({ rules: upsertPriceRule(p.rules, rule) }));
+    }
     setEditScope(null);
   }
 
   function deleteRule(scope: PriceDayScope) {
-    setPricing(p => ({ rules: removePriceRule(p.rules, courtId, scope) }));
+    if (mode === 'category') {
+      setCategoryPricing(prev => ({
+        ...prev,
+        [categoryId]: {
+          rules: removePriceRule(activePricing.rules, categoryId, scope, 'category'),
+        },
+      }));
+    } else {
+      setPricing(p => ({ rules: removePriceRule(p.rules, courtId, scope, 'court') }));
+    }
     if (editScope === scope) setEditScope(null);
   }
 
@@ -111,7 +176,7 @@ export function CourtPricingModal({
       {
         fromSlot: nextFrom,
         toSlot: Math.min(nextFrom + 4, dayHours.closingSlot),
-        pricePerHour: court?.price_per_hour ?? 200,
+        pricePerHour: basePrice,
       },
     ]);
   }
@@ -122,7 +187,11 @@ export function CourtPricingModal({
   }
 
   function handleSave() {
-    onSave(pricing);
+    if (mode === 'category' && onSaveCategory && categoryId) {
+      onSaveCategory(categoryId, categoryPricing[categoryId] ?? { rules: [] });
+    } else {
+      onSave(pricing);
+    }
     onClose();
   }
 
@@ -136,33 +205,81 @@ export function CourtPricingModal({
             <View style={s.body}>
               <Text style={s.title}>CENOVÉ KATEGORIE</Text>
               <Text style={s.sub}>
-                Nastavte cenu podle dnů a časových pásem (např. ráno vs. večer).
+                {categoryOnly
+                  ? 'Nastavte ceny pro vybranou kategorii kurtů.'
+                  : 'Nastavte cenu podle kategorií kurtů nebo jednotlivých kurtů mimo kategorii.'}
               </Text>
 
-              {/* Výběr kurtu */}
-              <Text style={s.label}>KURT</Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.courtScroll}>
-                {courts.map(c => {
-                  const cAccent = SPORT_COLORS[c.sport] ?? W.orange;
-                  const sel = c.id === courtId;
-                  return (
-                    <TouchableOpacity
-                      key={c.id}
-                      onPress={() => { setCourtId(c.id); setEditScope(null); }}
-                      style={[s.courtChip, sel && { backgroundColor: cAccent, borderColor: cAccent }]}
-                    >
-                      <Text style={[s.courtChipText, sel && { color: '#fff' }]}>{c.name}</Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </ScrollView>
+              {!categoryOnly && (
+              <View style={s.modeRow}>
+                <TouchableOpacity
+                  onPress={() => { setMode('category'); setEditScope(null); }}
+                  style={[s.modeChip, mode === 'category' && { backgroundColor: '#6366F1', borderColor: '#6366F1' }]}
+                >
+                  <Text style={[s.modeChipText, mode === 'category' && { color: '#fff' }]}>
+                    Podle kategorie
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={() => { setMode('court'); setEditScope(null); }}
+                  style={[s.modeChip, mode === 'court' && { backgroundColor: accent, borderColor: accent }]}
+                >
+                  <Text style={[s.modeChipText, mode === 'court' && { color: '#fff' }]}>
+                    Jednotlivý kurt
+                  </Text>
+                </TouchableOpacity>
+              </View>
+              )}
 
-              {/* Existující pravidla */}
-              {courtRules.length > 0 && (
+              {mode === 'category' ? (
+                <>
+                  <Text style={s.label}>KATEGORIE</Text>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.courtScroll}>
+                    {settings.categories.map(cat => {
+                      const sel = cat.id === categoryId;
+                      return (
+                        <TouchableOpacity
+                          key={cat.id}
+                          onPress={() => { setCategoryId(cat.id); setEditScope(null); }}
+                          style={[s.courtChip, sel && { backgroundColor: '#6366F1', borderColor: '#6366F1' }]}
+                        >
+                          <Text style={[s.courtChipText, sel && { color: '#fff' }]}>{cat.name}</Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </ScrollView>
+                  {category && (
+                    <Text style={s.courtListHint}>
+                      Kurty: {categoryCourts.map(c => c.name).join(', ') || 'žádné'}
+                    </Text>
+                  )}
+                </>
+              ) : (
+                <>
+                  <Text style={s.label}>KURT</Text>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.courtScroll}>
+                    {courts.map(c => {
+                      const cAccent = SPORT_COLORS[c.sport] ?? W.orange;
+                      const sel = c.id === courtId;
+                      return (
+                        <TouchableOpacity
+                          key={c.id}
+                          onPress={() => { setCourtId(c.id); setEditScope(null); }}
+                          style={[s.courtChip, sel && { backgroundColor: cAccent, borderColor: cAccent }]}
+                        >
+                          <Text style={[s.courtChipText, sel && { color: '#fff' }]}>{c.name}</Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </ScrollView>
+                </>
+              )}
+
+              {targetRules.length > 0 && (
                 <View style={s.section}>
                   <Text style={s.sectionTitle}>AKTIVNÍ PRAVIDLA</Text>
-                  {courtRules.map(rule => (
-                    <View key={`${rule.courtId}-${rule.scope}`} style={s.ruleRow}>
+                  {targetRules.map(rule => (
+                    <View key={`${rule.courtId ?? rule.categoryId}-${rule.scope}`} style={s.ruleRow}>
                       <View style={{ flex: 1 }}>
                         <Text style={s.ruleScope}>{scopeLabel(rule.scope)}</Text>
                         <Text style={s.ruleBands}>
@@ -182,7 +299,6 @@ export function CourtPricingModal({
                 </View>
               )}
 
-              {/* Nové / editace pravidla */}
               <View style={s.section}>
                 <Text style={s.sectionTitle}>
                   {editScope !== null ? 'UPRAVIT PRAVIDLO' : 'NOVÉ PRAVIDLO'}
@@ -208,7 +324,7 @@ export function CourtPricingModal({
 
                 {editScope === 'holiday' && (
                   <Text style={s.holidayHint}>
-                    Platí automaticky ve státní svátky ČR (Velikonoce, Vánoce, 28. 10. atd.).
+                    Platí automaticky ve státní svátky ČR.
                     {' '}Bez vlastního pravidla se použije ceník {settings.holidayTreatment === 'weekday' ? 'pracovních dnů' : 'víkendu'}.
                   </Text>
                 )}
@@ -307,11 +423,18 @@ const s = StyleSheet.create({
   body: { padding: 20 },
   title: { fontSize: 16, fontWeight: '900', color: colors.textPrimary, letterSpacing: 1 },
   sub: { fontSize: 12, color: colors.textMuted, lineHeight: 18, marginTop: 4, marginBottom: 12 },
+  modeRow: { flexDirection: 'row', gap: 8, marginBottom: 8 },
+  modeChip: {
+    flex: 1, paddingVertical: 10, alignItems: 'center',
+    borderWidth: 1, borderColor: colors.border, backgroundColor: colors.bgAlt,
+  },
+  modeChipText: { fontSize: 11, fontWeight: '800', color: colors.textSecondary },
   label: {
     fontSize: 9, fontWeight: '800', color: colors.textMuted,
     letterSpacing: 1, marginTop: 8, marginBottom: 6,
   },
   courtScroll: { marginBottom: 4 },
+  courtListHint: { fontSize: 11, color: colors.textMuted, marginBottom: 4, fontStyle: 'italic' },
   courtChip: {
     paddingHorizontal: 14, paddingVertical: 8, marginRight: 8,
     borderWidth: 1, borderColor: colors.border, backgroundColor: colors.bgAlt,

@@ -19,37 +19,49 @@ const W = colors.warm;
 export function OpeningHoursModal({
   visible,
   settings,
+  categoryId,
+  categoryName,
   onSave,
   onClose,
 }: {
   visible: boolean;
   settings: ClubSettings;
+  /** Upravit rozvrh konkrétní kategorie (fallback = globální openingSchedule) */
+  categoryId?: string;
+  categoryName?: string;
   onSave: (schedule: OpeningSchedule, holidayTreatment: HolidayTreatment) => void;
   onClose: () => void;
 }) {
-  const [schedule, setSchedule] = useState<OpeningSchedule>(settings.openingSchedule);
+  const baseSchedule = categoryId
+    ? (settings.categoryOpeningSchedule?.[categoryId] ?? settings.openingSchedule)
+    : settings.openingSchedule;
+
+  const [schedule, setSchedule] = useState<OpeningSchedule>(baseSchedule);
   const [holidayTreatment, setHolidayTreatment] = useState<HolidayTreatment>(settings.holidayTreatment);
-  const [useWeekday, setUseWeekday] = useState(!!settings.openingSchedule.weekday);
-  const [useWeekend, setUseWeekend] = useState(!!settings.openingSchedule.weekend);
+  const [useWeekday, setUseWeekday] = useState(!!baseSchedule.weekday);
+  const [useWeekend, setUseWeekend] = useState(!!baseSchedule.weekend);
   const [expandedDay, setExpandedDay] = useState<WeekdayIndex | null>(null);
 
   const upcomingHolidays = getUpcomingCzechHolidays(6);
 
   useEffect(() => {
     if (visible) {
+      const src = categoryId
+        ? (settings.categoryOpeningSchedule?.[categoryId] ?? settings.openingSchedule)
+        : settings.openingSchedule;
       setSchedule({
-        ...settings.openingSchedule,
-        byDay: { ...settings.openingSchedule.byDay },
-        dateOverrides: settings.openingSchedule.dateOverrides?.map(o => ({
+        ...src,
+        byDay: { ...src.byDay },
+        dateOverrides: src.dateOverrides?.map(o => ({
           ...o, hours: { ...o.hours },
         })) ?? [],
       });
       setHolidayTreatment(settings.holidayTreatment);
-      setUseWeekday(!!settings.openingSchedule.weekday);
-      setUseWeekend(!!settings.openingSchedule.weekend);
+      setUseWeekday(!!src.weekday);
+      setUseWeekend(!!src.weekend);
       setExpandedDay(null);
     }
-  }, [visible, settings]);
+  }, [visible, settings, categoryId]);
 
   function setDefault(hours: DayHours) {
     setSchedule(s => ({ ...s, default: clampDayHours(hours) }));
@@ -103,7 +115,9 @@ export function OpeningHoursModal({
             <View style={s.body}>
               <Text style={s.title}>PROVOZNÍ DOBA</Text>
               <Text style={s.sub}>
-                Nastavte otevírací dobu pro pracovní dny, víkend a jednotlivé dny v týdnu.
+                {categoryName
+                  ? `Kategorie „${categoryName}" — vlastní rozvrh (bez vlastního nastavení platí globální výchozí klubu).`
+                  : 'Globální výchozí rozvrh klubu — použije se u kategorií bez vlastního nastavení a u nezařazených kurtů.'}
               </Text>
 
               <View style={s.section}>

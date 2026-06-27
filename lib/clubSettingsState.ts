@@ -2,10 +2,21 @@ import type { ClubSettings } from '@/types/database';
 import { MOCK_CLUB_SETTINGS } from '@/lib/mockData';
 import { cloneSeasonPresets, cloneCourtSeasonSettings } from '@/lib/clubSeason';
 
+import {
+  cloneCategoryOpeningSchedules,
+  cloneCategoryDayOverrides,
+  cloneCategoryPricing,
+} from '@/lib/clubCategories';
+
 function cloneSettings(src: ClubSettings): ClubSettings {
   return {
     ...src,
     closurePeriods: [...src.closurePeriods],
+    categories: src.categories.map(c => ({ ...c, court_ids: [...c.court_ids] })),
+    seasons: src.seasons?.map(s => ({ ...s })) ?? [],
+    categoryOpeningSchedule: cloneCategoryOpeningSchedules(src.categoryOpeningSchedule),
+    categoryDayOverrides: cloneCategoryDayOverrides(src.categoryDayOverrides),
+    categoryPricing: cloneCategoryPricing(src.categoryPricing),
     openingSchedule: {
       ...src.openingSchedule,
       byDay: { ...src.openingSchedule.byDay },
@@ -25,6 +36,14 @@ function cloneSettings(src: ClubSettings): ClubSettings {
     courtSeasonSettings: Object.fromEntries(
       Object.entries(src.courtSeasonSettings ?? {}).map(([k, v]) => [k, cloneCourtSeasonSettings(v)]),
     ),
+    dayOverrides: src.dayOverrides
+      ? Object.fromEntries(
+        Object.entries(src.dayOverrides).map(([k, v]) => [k, { ...v }]),
+      )
+      : {},
+    uncategorizedCourtOrder: src.uncategorizedCourtOrder
+      ? [...src.uncategorizedCourtOrder]
+      : undefined,
   };
 }
 

@@ -10,10 +10,14 @@ export function SlotHoursStepper({
   hours,
   onChange,
   accent = W.amber,
+  openLabel = 'OTEVÍRÁ',
+  closeLabel = 'ZAVÍRÁ',
 }: {
   hours: DayHours;
   onChange: (h: DayHours) => void;
   accent?: string;
+  openLabel?: string;
+  closeLabel?: string;
 }) {
   const setOpening = (slot: number) =>
     onChange(clampDayHours({ ...hours, openingSlot: slot }));
@@ -23,7 +27,7 @@ export function SlotHoursStepper({
   return (
     <View style={st.row}>
       <View style={st.col}>
-        <Text style={st.label}>OTEVÍRÁ</Text>
+        <Text style={st.label}>{openLabel}</Text>
         <View style={st.stepper}>
           <TouchableOpacity
             onPress={() => setOpening(Math.max(0, hours.openingSlot - 1))}
@@ -41,7 +45,7 @@ export function SlotHoursStepper({
         </View>
       </View>
       <View style={st.col}>
-        <Text style={st.label}>ZAVÍRÁ</Text>
+        <Text style={st.label}>{closeLabel}</Text>
         <View style={st.stepper}>
           <TouchableOpacity
             onPress={() => setClosing(Math.max(hours.openingSlot + 1, hours.closingSlot - 1))}

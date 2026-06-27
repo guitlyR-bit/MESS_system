@@ -2,17 +2,112 @@ import type { ClubSettings, ClubClosurePeriod, ClubBooking } from '@/types/datab
 import { localDateKey, slotToTime, slotEndTime, SLOT_START_HOUR } from '@/lib/mockData';
 import { getDayHoursForDate, getDayHoursForCourt } from '@/lib/clubSchedule';
 import { isCourtSeasonallyClosed, mergeSettingsForCourt } from '@/lib/clubSeason';
+import { isCourtClosedByCalendarSeason, resolveCategoryId } from '@/lib/clubCategories';
 
+
+export function isPartialCourtClosure(p: ClubClosurePeriod): boolean {
+  return p.closedFromSlot !== undefined && p.closedToSlot !== undefined;
+}
+
+export function isFullDayClosurePeriod(p: ClubClosurePeriod): boolean {
+  return !isPartialCourtClosure(p);
+}
 
 export function findClosurePeriodForDate(
   dateKey: string,
   settings: ClubSettings,
+  categoryId?: string,
 ): ClubClosurePeriod | undefined {
-  return settings.closurePeriods.find(p => dateKey >= p.fromDate && dateKey <= p.toDate);
+  return settings.closurePeriods.find(p => {
+    if (p.courtId) return false;
+    if (!isFullDayClosurePeriod(p)) return false;
+    if (dateKey < p.fromDate || dateKey > p.toDate) return false;
+    if (!p.categoryId) return true;
+    if (categoryId) return p.categoryId === categoryId;
+    return false;
+  });
+}
+
+export function findCourtClosurePeriod(
+  courtId: string,
+  dateKey: string,
+  settings: ClubSettings,
+): ClubClosurePeriod | undefined {
+  return settings.closurePeriods.find(p =>
+    p.courtId === courtId
+    && isFullDayClosurePeriod(p)
+    && dateKey >= p.fromDate
+    && dateKey <= p.toDate,
+  );
+}
+
+export function getCourtClosurePeriods(
+  courtId: string,
+  settings: ClubSettings,
+): ClubClosurePeriod[] {
+  return settings.closurePeriods.filter(p => p.courtId === courtId);
+}
+
+export function findCourtPartialClosuresForDate(
+  courtId: string,
+  dateKey: string,
+  settings: ClubSettings,
+): ClubClosurePeriod[] {
+  return settings.closurePeriods.filter(p =>
+    p.courtId === courtId
+    && isPartialCourtClosure(p)
+    && dateKey >= p.fromDate
+    && dateKey <= p.toDate,
+  );
+}
+
+export function findClosurePeriodForCourt(
+  courtId: string,
+  dateKey: string,
+  settings: ClubSettings,
+): ClubClosurePeriod | undefined {
+  const clubWide = settings.closurePeriods.find(p =>
+    !p.categoryId && !p.courtId && isFullDayClosurePeriod(p)
+    && dateKey >= p.fromDate && dateKey <= p.toDate,
+  );
+  if (clubWide) return clubWide;
+  const courtSpecific = findCourtClosurePeriod(courtId, dateKey, settings);
+  if (courtSpecific) return courtSpecific;
+  const categoryId = resolveCategoryId(courtId, settings);
+  if (!categoryId) return undefined;
+  return findClosurePeriodForDate(dateKey, settings, categoryId);
+}
+
+export function isCourtSlotInClosure(
+  courtId: string,
+  dateKey: string,
+  slotIdx: number,
+  settings: ClubSettings,
+): boolean {
+  if (findClosurePeriodForCourt(courtId, dateKey, settings)) return true;
+  return findCourtPartialClosuresForDate(courtId, dateKey, settings).some(p =>
+    slotIdx >= p.closedFromSlot! && slotIdx <= p.closedToSlot!,
+  );
+}
+
+export function formatCourtClosureType(period: ClubClosurePeriod): string {
+  if (!isPartialCourtClosure(period)) return 'Celý den';
+  return `${slotToTime(period.closedFromSlot!)}–${slotEndTime(period.closedToSlot!)}`;
 }
 
 export function isDateFullyClosed(dateKey: string, settings: ClubSettings): boolean {
-  return !!findClosurePeriodForDate(dateKey, settings);
+  return settings.closurePeriods.some(p =>
+    !p.categoryId && !p.courtId && isFullDayClosurePeriod(p)
+    && dateKey >= p.fromDate && dateKey <= p.toDate,
+  );
+}
+
+export function isCourtDateFullyClosed(
+  courtId: string,
+  dateKey: string,
+  settings: ClubSettings,
+): boolean {
+  return !!findClosurePeriodForCourt(courtId, dateKey, settings);
 }
 
 /** Poslední slot, který lze rezervovat v daný den (po předčasném uzavření) */
@@ -78,7 +173,9 @@ export function isSlotBookableForCourt(
   settings: ClubSettings,
   nowMinutes: number,
 ): boolean {
+  if (isCourtSlotInClosure(courtId, dateKey, slotIdx, settings)) return false;
   if (isCourtSeasonallyClosed(courtId, dateKey, settings)) return false;
+  if (isCourtClosedByCalendarSeason(courtId, dateKey, settings)) return false;
   const courtSettings = mergeSettingsForCourt(settings, courtId, dateKey);
   const dayHours = getDayHoursForCourt(courtId, dateKey, settings);
   if (dayHours.closingSlot < dayHours.openingSlot) return false;
@@ -104,6 +201,7 @@ export function getEffectiveClosingSlotForCourt(
   settings: ClubSettings,
 ): number {
   if (isCourtSeasonallyClosed(courtId, dateKey, settings)) return -1;
+  if (isCourtClosedByCalendarSeason(courtId, dateKey, settings)) return -1;
   const courtSettings = mergeSettingsForCourt(settings, courtId, dateKey);
   return getEffectiveClosingSlot(dateKey, courtSettings);
 }
@@ -114,6 +212,7 @@ export function getOpeningSlotForCourt(
   settings: ClubSettings,
 ): number {
   if (isCourtSeasonallyClosed(courtId, dateKey, settings)) return 0;
+  if (isCourtClosedByCalendarSeason(courtId, dateKey, settings)) return 0;
   return getDayHoursForCourt(courtId, dateKey, settings).openingSlot;
 }
 

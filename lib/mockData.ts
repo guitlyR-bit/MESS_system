@@ -3,7 +3,7 @@
  * Nahrazuje volání Supabase — bude vyměněno za reálné API
  */
 
-import type { CourtWithClub, BookingWithCourt, SportType, ClubBooking, ClubSettings, PaymentStatus } from '@/types/database';
+import type { CourtWithClub, BookingWithCourt, SportType, ClubBooking, ClubSettings, PaymentStatus, CourtCategory, Season } from '@/types/database';
 
 // ─── Sportoviště (venues / kluby) ─────────────────────────────────────────────
 
@@ -66,6 +66,71 @@ export const MOCK_VENUES: Venue[] = [
   },
 ];
 
+// ─── Sezóny klubu ─────────────────────────────────────────────────────────────
+
+export const MOCK_SEASONS: Season[] = [
+  {
+    id: 'season_summer_2026',
+    name: 'Letní sezóna 2026',
+    start_date: '2026-04-01',
+    end_date: '2026-09-30',
+  },
+  {
+    id: 'season_winter_2025_26',
+    name: 'Zimní sezóna 2025/26',
+    start_date: '2025-10-01',
+    end_date: '2026-03-31',
+  },
+  {
+    id: 'season_summer_2025',
+    name: 'Letní sezóna 2025',
+    start_date: '2025-04-01',
+    end_date: '2025-09-30',
+    is_closed: true,
+  },
+];
+
+// ─── Barvy kategorií kurtů ────────────────────────────────────────────────────
+
+export const CATEGORY_COLORS = [
+  { id: 'orange', hex: '#F97316', label: 'Oranžová' },
+  { id: 'blue',   hex: '#3B82F6', label: 'Modrá' },
+  { id: 'green',  hex: '#22C55E', label: 'Zelená' },
+  { id: 'purple', hex: '#8B5CF6', label: 'Fialová' },
+  { id: 'red',    hex: '#EF4444', label: 'Červená' },
+  { id: 'teal',   hex: '#14B8A6', label: 'Tyrkysová' },
+  { id: 'yellow', hex: '#EAB308', label: 'Žlutá' },
+  { id: 'pink',   hex: '#EC4899', label: 'Růžová' },
+] as const;
+
+export type CategoryColorId = typeof CATEGORY_COLORS[number]['id'];
+
+// ─── Kategorie kurtů ──────────────────────────────────────────────────────────
+
+export const MOCK_COURT_CATEGORIES: CourtCategory[] = [
+  {
+    id: 'cat_sparta_outdoor',
+    name: 'Venkovní kurty',
+    court_ids: ['c1', 'c2'],
+    color: '#F97316',
+    season_id: 'season_summer_2026',
+  },
+  {
+    id: 'cat_badminton_hall',
+    name: 'Halové kurty',
+    court_ids: ['c3', 'c4'],
+    color: '#3B82F6',
+    season_id: 'season_winter_2025_26',
+  },
+  {
+    id: 'cat_squash',
+    name: 'Squash',
+    court_ids: ['c5'],
+    color: '#22C55E',
+    season_id: 'season_summer_2026',
+  },
+];
+
 // ─── Sportoviště ──────────────────────────────────────────────────────────────
 
 export const MOCK_COURTS: CourtWithClub[] = [
@@ -81,6 +146,7 @@ export const MOCK_COURTS: CourtWithClub[] = [
     is_active: true,
     price_per_hour: 250,
     capacity: 4,
+    category_id: 'cat_sparta_outdoor',
     available_today: 5,
     created_at: '2024-01-01T00:00:00Z',
   },
@@ -96,6 +162,7 @@ export const MOCK_COURTS: CourtWithClub[] = [
     is_active: true,
     price_per_hour: 250,
     capacity: 4,
+    category_id: 'cat_sparta_outdoor',
     available_today: 3,
     created_at: '2024-01-01T00:00:00Z',
   },
@@ -111,6 +178,7 @@ export const MOCK_COURTS: CourtWithClub[] = [
     is_active: true,
     price_per_hour: 180,
     capacity: 4,
+    category_id: 'cat_badminton_hall',
     available_today: 7,
     created_at: '2024-01-01T00:00:00Z',
   },
@@ -126,6 +194,7 @@ export const MOCK_COURTS: CourtWithClub[] = [
     is_active: true,
     price_per_hour: 180,
     capacity: 4,
+    category_id: 'cat_badminton_hall',
     available_today: 2,
     created_at: '2024-01-01T00:00:00Z',
   },
@@ -141,6 +210,7 @@ export const MOCK_COURTS: CourtWithClub[] = [
     is_active: true,
     price_per_hour: 200,
     capacity: 2,
+    category_id: 'cat_squash',
     available_today: 4,
     created_at: '2024-01-01T00:00:00Z',
   },
@@ -443,11 +513,36 @@ const MOCK_SUMMER_PRICING = {
   ],
 };
 
+const MOCK_CATEGORY_PRICING = {
+  cat_sparta_outdoor: {
+    rules: [
+      {
+        id: 'pr_cat_sparta_weekday',
+        categoryId: 'cat_sparta_outdoor',
+        scope: 'weekday' as const,
+        bands: [
+          { fromSlot: 14, toSlot: 31, pricePerHour: 220 },
+          { fromSlot: 32, toSlot: 43, pricePerHour: 280 },
+        ],
+      },
+      {
+        id: 'pr_cat_sparta_weekend',
+        categoryId: 'cat_sparta_outdoor',
+        scope: 'weekend' as const,
+        bands: [
+          { fromSlot: 16, toSlot: 42, pricePerHour: 300 },
+        ],
+      },
+    ],
+  },
+};
+
 export const MOCK_CLUB_SETTINGS: ClubSettings = {
   editLockHours:        24,
   openingSlot:          14,
   closingSlot:          43,
   maxBookingDaysAhead:  14,
+  minBookingDurationMinutes: 60,
   earlyCloseEnabled:    false,
   earlyCloseSlot:       44,
   earlyCloseNote:       '',
@@ -501,4 +596,9 @@ export const MOCK_CLUB_SETTINGS: ClubSettings = {
     winter: { fromMMDD: '10-01', toMMDD: '03-31' },
   },
   courtSeasonSettings: {},
+  dayOverrides: {},
+  seasons: MOCK_SEASONS,
+  categories: MOCK_COURT_CATEGORIES,
+  categoryPricing: MOCK_CATEGORY_PRICING,
+  uncategorizedCourtOrder: ['c6'],
 };
