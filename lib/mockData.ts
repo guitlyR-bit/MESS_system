@@ -413,9 +413,92 @@ export function createMockClubBookings(): ClubBooking[] {
 /** Mock rezervace — při importu modulu; pro runtime použij createMockClubBookings() */
 export const MOCK_CLUB_BOOKINGS: ClubBooking[] = createMockClubBookings();
 
+const MOCK_SUMMER_OPENING = {
+  default: { openingSlot: 14, closingSlot: 43 },
+  weekday: { openingSlot: 14, closingSlot: 43 },
+  weekend: { openingSlot: 16, closingSlot: 42 },
+  byDay: {} as Record<number, { openingSlot: number; closingSlot: number }>,
+  dateOverrides: [] as { date: string; hours: { openingSlot: number; closingSlot: number } }[],
+};
+
+const MOCK_SUMMER_PRICING = {
+  rules: [
+    {
+      id: 'pr_c1_weekday',
+      courtId: 'c1',
+      scope: 'weekday' as const,
+      bands: [
+        { fromSlot: 14, toSlot: 31, pricePerHour: 220 },
+        { fromSlot: 32, toSlot: 43, pricePerHour: 280 },
+      ],
+    },
+    {
+      id: 'pr_c1_weekend',
+      courtId: 'c1',
+      scope: 'weekend' as const,
+      bands: [
+        { fromSlot: 16, toSlot: 42, pricePerHour: 300 },
+      ],
+    },
+  ],
+};
+
 export const MOCK_CLUB_SETTINGS: ClubSettings = {
-  editLockHours:        24,   // hráč nemůže editovat méně než 24h před rezervací
-  openingSlot:          14,   // 7:00 (slot 14 při SLOT_START_HOUR=0)
-  closingSlot:          43,   // 21:30 (slot 43 při SLOT_START_HOUR=0); max 47 = 24:00
-  maxBookingDaysAhead:  14,   // hráč může rezervovat max 14 dní dopředu
+  editLockHours:        24,
+  openingSlot:          14,
+  closingSlot:          43,
+  maxBookingDaysAhead:  14,
+  earlyCloseEnabled:    false,
+  earlyCloseSlot:       44,
+  earlyCloseNote:       '',
+  closurePeriods:       [],
+  holidayTreatment:     'weekday',
+  seasonalModeEnabled:  false,
+  activeSeason:         'summer',
+  openingSchedule:      MOCK_SUMMER_OPENING,
+  pricing:              MOCK_SUMMER_PRICING,
+  seasonPresets: {
+    summer: {
+      openingSchedule: MOCK_SUMMER_OPENING,
+      pricing: MOCK_SUMMER_PRICING,
+      holidayTreatment: 'weekday',
+    },
+    winter: {
+      openingSchedule: {
+        default: { openingSlot: 16, closingSlot: 40 },
+        weekday: { openingSlot: 16, closingSlot: 40 },
+        weekend: { openingSlot: 16, closingSlot: 38 },
+        byDay: {},
+        dateOverrides: [],
+      },
+      pricing: {
+        rules: [
+          {
+            id: 'pr_c1_w_weekday',
+            courtId: 'c1',
+            scope: 'weekday',
+            bands: [
+              { fromSlot: 16, toSlot: 30, pricePerHour: 180 },
+              { fromSlot: 31, toSlot: 40, pricePerHour: 220 },
+            ],
+          },
+          {
+            id: 'pr_c1_w_weekend',
+            courtId: 'c1',
+            scope: 'weekend',
+            bands: [
+              { fromSlot: 16, toSlot: 38, pricePerHour: 250 },
+            ],
+          },
+        ],
+      },
+      holidayTreatment: 'weekend',
+    },
+  },
+  autoSeasonByDate: false,
+  seasonPeriods: {
+    summer: { fromMMDD: '04-01', toMMDD: '09-30' },
+    winter: { fromMMDD: '10-01', toMMDD: '03-31' },
+  },
+  courtSeasonSettings: {},
 };

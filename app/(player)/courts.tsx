@@ -6,6 +6,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors } from '@/lib/theme';
 import { useBookings } from '@/hooks/useBookings';
+import { useClubSettings } from '@/hooks/useClubSettings';
 import {
   MOCK_COURTS,
   MOCK_VENUES,
@@ -14,13 +15,26 @@ import {
   slotToTime,
   slotEndTime,
   slotDuration,
-  slotPrice,
   fmtDay,
+  localDateKey,
   SPORT_LABELS,
   SURFACE_LABELS,
   type Venue,
 } from '@/lib/mockData';
-import type { CourtWithClub } from '@/types/database';
+import {
+  isDateFullyClosed,
+  getClosureMessageForDate,
+  getClosureTitleForDate,
+  isSlotBookableForCourt,
+  getOpeningSlotForCourt,
+  getEffectiveClosingSlotForCourt,
+} from '@/lib/clubClosure';
+import { calculateSlotsPrice } from '@/lib/clubSchedule';
+import { mergeSettingsForDate, isCourtSeasonallyClosed } from '@/lib/clubSeason';
+import {
+  getCzechHoliday, holidayTreatmentLabel,
+} from '@/lib/czechHolidays';
+import type { CourtWithClub, ClubSettings } from '@/types/database';
 
 type ScreenView = 'venues' | 'courts' | 'slots' | 'confirm';
 const W = colors.warm;
@@ -42,6 +56,7 @@ export default function PlayerCourtsScreen() {
   const [search, setSearch]               = useState('');
 
   const { createBooking, getBookedSlots } = useBookings();
+  const clubSettings = useClubSettings();
 
   function openVenue(venue: Venue) {
     setSelectedVenue(venue);
@@ -59,7 +74,13 @@ export default function PlayerCourtsScreen() {
 
   function handleBook() {
     if (!selectedCourt || selectedSlots.length === 0) return;
-    const dateKey = selectedDate.toISOString().slice(0, 10);
+    const dateKey = localDateKey(selectedDate);
+    const nowMinutes = new Date().getHours() * 60 + new Date().getMinutes();
+    if (isDateFullyClosed(dateKey, clubSettings)) return;
+    if (isCourtSeasonallyClosed(selectedCourt.id, dateKey, clubSettings)) return;
+    if (selectedSlots.some(s => !isSlotBookableForCourt(
+      s, selectedCourt.id, dateKey, clubSettings, nowMinutes,
+    ))) return;
     createBooking({
       courtId:    selectedCourt.id,
       courtName:  selectedCourt.name,
@@ -68,7 +89,9 @@ export default function PlayerCourtsScreen() {
       clubCity:   selectedCourt.club_city,
       date:       dateKey,
       slots:      selectedSlots,
-      price:      slotPrice(selectedSlots.length, selectedCourt.price_per_hour),
+      price:      Math.round(calculateSlotsPrice(
+        selectedCourt.id, dateKey, selectedSlots, selectedCourt.price_per_hour, clubSettings,
+      )),
     });
     setView('confirm');
   }
@@ -80,6 +103,7 @@ export default function PlayerCourtsScreen() {
         court={selectedCourt}
         date={selectedDate}
         slots={selectedSlots}
+        clubSettings={clubSettings}
         onClose={() => { setView('venues'); setSelectedVenue(null); setSelectedCourt(null); setSelectedSlots([]); }}
         onNewBooking={() => { setSelectedSlots([]); setView('slots'); }}
       />
@@ -88,7 +112,7 @@ export default function PlayerCourtsScreen() {
 
   // ── Výběr slotů ─────────────────────────────────────────────────────────────
   if (view === 'slots' && selectedCourt) {
-    const dateKey   = selectedDate.toISOString().slice(0, 10);
+    const dateKey   = localDateKey(selectedDate);
     const bookedNow = getBookedSlots(selectedCourt.id, dateKey);
     return (
       <SlotsView
@@ -322,14 +346,41 @@ function SlotsView({
   onSlotsChange: (slots: number[]) => void;
   onBook: () => void;
 }) {
+  const clubSettings = useClubSettings();
   const days       = getNext14Days();
-  const dateKey    = selectedDate.toISOString().slice(0, 10);
+  const dateKey    = localDateKey(selectedDate);
+  const todayKey   = localDateKey();
+  const nowMinutes = new Date().getHours() * 60 + new Date().getMinutes();
   const sportColor = SPORT_COLORS[court.sport] ?? W.orange;
   const selMin     = selectedSlots.length > 0 ? Math.min(...selectedSlots) : -1;
   const selMax     = selectedSlots.length > 0 ? Math.max(...selectedSlots) : -1;
 
+  const dateSettings = mergeSettingsForDate(clubSettings, dateKey);
+  const seasonClosed = isCourtSeasonallyClosed(court.id, dateKey, clubSettings);
+
+  const dateFullyClosed = isDateFullyClosed(dateKey, dateSettings) || seasonClosed;
+  const closureTitle = seasonClosed
+    ? 'Kurt je v této sezóně uzavřen'
+    : getClosureTitleForDate(dateKey, dateSettings);
+  const closureMessage = seasonClosed
+    ? undefined
+    : getClosureMessageForDate(dateKey, dateSettings);
+  const earlyCloseToday = dateKey === todayKey && dateSettings.earlyCloseEnabled;
+  const showClosureBanner = dateFullyClosed || earlyCloseToday;
+  const publicHoliday = getCzechHoliday(dateKey);
+
+  const displaySlots = ALL_SLOTS.filter(
+    idx => idx >= getOpeningSlotForCourt(court.id, dateKey, clubSettings)
+      && idx <= getEffectiveClosingSlotForCourt(court.id, dateKey, clubSettings),
+  );
+
+  function slotAvailable(idx: number): boolean {
+    return isSlotBookableForCourt(idx, court.id, dateKey, clubSettings, nowMinutes)
+      && !bookedSlots.includes(idx);
+  }
+
   function handleSlotPress(idx: number) {
-    if (bookedSlots.includes(idx)) return;
+    if (!slotAvailable(idx)) return;
     if (selectedSlots.length === 0) { onSlotsChange([idx]); return; }
 
     if (idx === selMin && selectedSlots.length > 1) {
@@ -338,16 +389,18 @@ function SlotsView({
     if (idx === selMax) {
       onSlotsChange(selectedSlots.filter(s => s !== selMax)); return;
     }
-    if (idx === selMax + 1 && !bookedSlots.includes(idx)) {
+    if (idx === selMax + 1 && slotAvailable(idx)) {
       onSlotsChange([...selectedSlots, idx]); return;
     }
-    if (idx === selMin - 1 && !bookedSlots.includes(idx)) {
+    if (idx === selMin - 1 && slotAvailable(idx)) {
       onSlotsChange([idx, ...selectedSlots]); return;
     }
     onSlotsChange([idx]);
   }
 
-  const totalPrice   = slotPrice(selectedSlots.length, court.price_per_hour);
+  const totalPrice   = Math.round(calculateSlotsPrice(
+    court.id, dateKey, selectedSlots, court.price_per_hour, clubSettings,
+  ));
   const duration     = slotDuration(selectedSlots.length);
   const bookingLabel = selectedSlots.length > 0
     ? `${slotToTime(selMin)} – ${slotEndTime(selMax)}` : '';
@@ -371,12 +424,18 @@ function SlotsView({
           contentContainerStyle={s.dayScroll}>
           {days.map((day, i) => {
             const fmt        = fmtDay(day);
-            const isSelected = day.toISOString().slice(0, 10) === dateKey;
+            const dayKey     = localDateKey(day);
+            const isSelected = dayKey === dateKey;
+            const isHoliday  = !!getCzechHoliday(dayKey);
             return (
               <TouchableOpacity
                 key={i}
                 onPress={() => onSelectDate(day)}
-                style={[s.dayChip, isSelected && { backgroundColor: sportColor }]}
+                style={[
+                  s.dayChip,
+                  isSelected && { backgroundColor: sportColor },
+                  isHoliday && !isSelected && s.dayChipHoliday,
+                ]}
               >
                 <Text style={[s.dayChipWeekday, isSelected && { color: '#fff' }]}>
                   {i === 0 ? 'DNES' : fmt.short}
@@ -390,25 +449,53 @@ function SlotsView({
           })}
         </ScrollView>
 
+        {publicHoliday && !dateFullyClosed && (
+          <View style={s.holidayBanner}>
+            <Text style={s.holidayBannerTitle}>Státní svátek — {publicHoliday.name}</Text>
+            <Text style={s.holidayBannerText}>
+              Provoz a ceny {holidayTreatmentLabel(clubSettings.holidayTreatment)}.
+            </Text>
+          </View>
+        )}
+
+        {showClosureBanner && (
+          <View style={s.closureBanner}>
+            <Text style={s.closureBannerTitle}>{closureTitle}</Text>
+            {closureMessage ? (
+              <Text style={s.closureBannerText}>{closureMessage}</Text>
+            ) : null}
+          </View>
+        )}
+
         {/* Sloty */}
         <View style={s.slotHintRow}>
           <Text style={s.sectionTitle}>VOLNÉ TERMÍNY</Text>
-          <Text style={s.slotHint}>Klikněte na blok, sousedním rozšiřte výběr</Text>
+          {!dateFullyClosed && (
+            <Text style={s.slotHint}>Klikněte na blok, sousedním rozšiřte výběr</Text>
+          )}
         </View>
 
+        {dateFullyClosed ? (
+          <View style={s.closureOnlyBox}>
+            <Text style={s.closureOnlyText}>V tento den nelze vytvořit rezervaci.</Text>
+          </View>
+        ) : (
         <View style={s.slotGrid}>
-          {ALL_SLOTS.map(idx => {
+          {displaySlots.map(idx => {
             const isBooked   = bookedSlots.includes(idx);
+            const isClosed   = !isSlotBookableForCourt(idx, court.id, dateKey, clubSettings, nowMinutes);
             const isSelected = selectedSlots.includes(idx);
             const isFirst    = idx === selMin;
             const isLast     = idx === selMax;
+            const disabled   = isBooked || isClosed;
             return (
               <TouchableOpacity
                 key={idx}
-                disabled={isBooked}
+                disabled={disabled}
                 onPress={() => handleSlotPress(idx)}
                 style={[
                   s.slot,
+                  isClosed   && s.slotClosed,
                   isBooked   && s.slotBooked,
                   isSelected && { backgroundColor: sportColor, borderColor: sportColor },
                   isSelected && isFirst && s.slotFirst,
@@ -417,13 +504,15 @@ function SlotsView({
               >
                 <Text style={[
                   s.slotTime,
+                  isClosed   && s.slotTextClosed,
                   isBooked   && s.slotTextBooked,
                   isSelected && s.slotTextSelected,
                 ]}>
                   {slotToTime(idx)}
                 </Text>
+                {isClosed && !isBooked && <Text style={s.slotSubClosed}>uzavřeno</Text>}
                 {isBooked && <Text style={s.slotSubBooked}>obsazeno</Text>}
-                {!isBooked && !isSelected && <Text style={s.slotSub}>30 min</Text>}
+                {!isBooked && !isClosed && !isSelected && <Text style={s.slotSub}>30 min</Text>}
                 {isSelected && isLast && (
                   <Text style={[s.slotSub, { color: 'rgba(255,255,255,0.8)' }]}>
                     {isFirst ? '30 min' : 'konec'}
@@ -433,6 +522,7 @@ function SlotsView({
             );
           })}
         </View>
+        )}
 
         {/* Souhrn + rezervační tlačítko */}
         {selectedSlots.length > 0 && (
@@ -468,15 +558,18 @@ function SlotsView({
 
 // ─── 4. Potvrzení ─────────────────────────────────────────────────────────────
 
-function ConfirmView({ court, date, slots, onClose, onNewBooking }: {
+function ConfirmView({ court, date, slots, clubSettings, onClose, onNewBooking }: {
   court: CourtWithClub; date: Date; slots: number[];
+  clubSettings: ClubSettings;
   onClose: () => void; onNewBooking: () => void;
 }) {
   const sportColor = SPORT_COLORS[court.sport] ?? W.orange;
   const fmt        = fmtDay(date);
   const selMin     = Math.min(...slots);
   const selMax     = Math.max(...slots);
-  const totalPrice = slotPrice(slots.length, court.price_per_hour);
+  const totalPrice = Math.round(calculateSlotsPrice(
+    court.id, localDateKey(date), slots, court.price_per_hour, clubSettings,
+  ));
 
   return (
     <SafeAreaView style={[s.safe, { justifyContent: 'center' }]} edges={['bottom']}>
@@ -587,6 +680,7 @@ const s = StyleSheet.create({
   // Výběr dne
   dayScroll: { paddingHorizontal: 14, paddingBottom: 4, gap: 8 },
   dayChip: { alignItems: 'center', paddingHorizontal: 14, paddingVertical: 10, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, minWidth: 56 },
+  dayChipHoliday: { borderColor: W.amber, backgroundColor: '#FFFBEB' },
   dayChipWeekday: { fontSize: 9, fontWeight: '800', color: colors.textMuted, letterSpacing: 1 },
   dayChipNum: { fontSize: 20, fontWeight: '900', color: colors.textPrimary, lineHeight: 26 },
   dayChipMonth: { fontSize: 10, color: colors.textMuted },
@@ -597,11 +691,32 @@ const s = StyleSheet.create({
   slotFirst: { borderTopLeftRadius: 4, borderBottomLeftRadius: 4 },
   slotLast:  { borderTopRightRadius: 4, borderBottomRightRadius: 4 },
   slotBooked: { backgroundColor: colors.bgAlt, borderColor: colors.border },
+  slotClosed: { backgroundColor: 'rgba(239,68,68,0.1)', borderColor: 'rgba(239,68,68,0.25)' },
   slotTime: { fontSize: 13, fontWeight: '800', color: colors.textPrimary },
   slotTextBooked: { color: colors.textDisabled },
+  slotTextClosed: { color: colors.textDisabled },
   slotTextSelected: { color: '#fff' },
   slotSub: { fontSize: 9, color: colors.textMuted },
   slotSubBooked: { fontSize: 9, color: colors.textDisabled },
+  slotSubClosed: { fontSize: 9, color: 'rgba(185,28,28,0.75)', fontWeight: '800' },
+
+  closureBanner: {
+    marginHorizontal: 16, marginTop: 4, marginBottom: 8, padding: 12,
+    backgroundColor: '#FEE2E2', borderWidth: 1, borderColor: '#FECACA', gap: 4,
+  },
+  closureBannerTitle: { fontSize: 13, fontWeight: '900', color: W.red },
+  closureBannerText: { fontSize: 12, color: colors.textSecondary, lineHeight: 18 },
+  holidayBanner: {
+    marginHorizontal: 16, marginTop: 4, marginBottom: 8, padding: 12,
+    backgroundColor: '#FFFBEB', borderWidth: 1, borderColor: '#FDE68A', gap: 4,
+  },
+  holidayBannerTitle: { fontSize: 13, fontWeight: '900', color: '#B45309' },
+  holidayBannerText: { fontSize: 12, color: colors.textSecondary, lineHeight: 18 },
+  closureOnlyBox: {
+    marginHorizontal: 16, padding: 20, backgroundColor: colors.surface,
+    borderWidth: 1, borderColor: colors.border, alignItems: 'center',
+  },
+  closureOnlyText: { fontSize: 13, fontWeight: '700', color: colors.textMuted },
 
   // Souhrn + tlačítko
   bookBtnWrap: { padding: 16, paddingTop: 20, gap: 10 },

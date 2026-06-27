@@ -96,12 +96,110 @@ export interface ClubBooking {
   note?: string;
 }
 
-/** Nastavení klubu — editační zámek, provozní doba */
+/** Uzavření sportoviště v kalendářním termínu (včetně obou koncových dnů) */
+export interface ClubClosurePeriod {
+  id: string;
+  fromDate: string;   // YYYY-MM-DD
+  toDate: string;     // YYYY-MM-DD
+  note?: string;
+}
+
+/** Provozní doba — slot indexy 0–47 (30 min) */
+export interface DayHours {
+  openingSlot: number;
+  closingSlot: number;
+}
+
+/** 0 = pondělí … 6 = neděle */
+export type WeekdayIndex = 0 | 1 | 2 | 3 | 4 | 5 | 6;
+
+export interface DateHoursOverride {
+  date: string;
+  hours: DayHours;
+}
+
+/** Rozvrh otevírací doby — výchozí, pracovní dny, víkend, jednotlivé dny */
+export interface OpeningSchedule {
+  default: DayHours;
+  weekday?: DayHours;
+  weekend?: DayHours;
+  byDay?: Partial<Record<WeekdayIndex, DayHours>>;
+  dateOverrides?: DateHoursOverride[];
+}
+
+/** Jak se chovají automaticky rozpoznané státní svátky */
+export type HolidayTreatment = 'weekday' | 'weekend';
+
+/** Rozsah platnosti cenového pravidla */
+export type PriceDayScope = 'all' | 'weekday' | 'weekend' | 'holiday' | WeekdayIndex;
+
+/** Časové pásmo s cenou za hodinu */
+export interface PriceTimeBand {
+  fromSlot: number;
+  toSlot: number;
+  pricePerHour: number;
+}
+
+/** Cenové pravidlo pro kurt — platí pro zvolený rozsah dnů a časová pásma */
+export interface CourtPriceRule {
+  id: string;
+  courtId: string;
+  scope: PriceDayScope;
+  bands: PriceTimeBand[];
+}
+
+export interface ClubPricing {
+  rules: CourtPriceRule[];
+}
+
+/** Sezónní profil — provozní doba + ceník pro léto / zimu */
+export type SeasonId = 'summer' | 'winter';
+
+export interface SeasonProfile {
+  openingSchedule: OpeningSchedule;
+  pricing: ClubPricing;
+  holidayTreatment: HolidayTreatment;
+}
+
+export interface SeasonPresets {
+  summer: SeasonProfile;
+  winter: SeasonProfile;
+}
+
+/** Období sezóny (MM-DD, opakuje se každý rok; zima může přes rok) */
+export interface SeasonPeriod {
+  fromMMDD: string;
+  toMMDD: string;
+}
+
+/** Sezónní nastavení jednotlivého kurtu */
+export interface CourtSeasonSettings {
+  useCustomProfiles: boolean;
+  closedInSummer: boolean;
+  closedInWinter: boolean;
+  seasonPresets?: SeasonPresets;
+}
+
+/** Nastavení klubu — editační zámek, provozní doba, uzavření */
 export interface ClubSettings {
-  editLockHours: number;        // počet hodin před začátkem, kdy hráč nesmí editovat
-  openingSlot: number;          // index prvního slotu dne (0–47; 0 = 0:00, 14 = 7:00)
-  closingSlot: number;          // index posledního slotu dne (0–47; 43 = 21:30, 47 = 23:30 → konec 24:00)
-  maxBookingDaysAhead: number;  // počet dní dopředu, kdy je možné rezervovat (1–365)
+  editLockHours: number;
+  openingSlot: number;
+  closingSlot: number;
+  maxBookingDaysAhead: number;
+  earlyCloseEnabled: boolean;
+  earlyCloseSlot: number;
+  earlyCloseNote?: string;
+  closurePeriods: ClubClosurePeriod[];
+  openingSchedule: OpeningSchedule;
+  holidayTreatment: HolidayTreatment;
+  pricing: ClubPricing;
+  seasonalModeEnabled: boolean;
+  /** Automaticky volit sezónu podle data (místo ručního přepínače) */
+  autoSeasonByDate: boolean;
+  activeSeason: SeasonId;
+  seasonPeriods: { summer: SeasonPeriod; winter: SeasonPeriod };
+  seasonPresets: SeasonPresets;
+  courtSeasonSettings: Record<string, CourtSeasonSettings>;
 }
 
 export type MatchStatus = 'scheduled' | 'in_progress' | 'completed' | 'cancelled';

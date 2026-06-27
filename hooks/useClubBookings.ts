@@ -1,8 +1,10 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
+import { getEffectiveClosingSlot } from '@/lib/clubClosure';
+import { calculateSlotsPrice } from '@/lib/clubSchedule';
+import { applySettingsPatch } from '@/lib/clubSeason';
 import type { ClubBooking, ClubSettings, CourtWithClub, PaymentStatus } from '@/types/database';
 import {
   createMockClubBookings,
-  MOCK_CLUB_SETTINGS,
   MOCK_COURTS,
   slotToTime,
   slotEndTime,
@@ -10,10 +12,17 @@ import {
   localDateKey,
   slotPrice,
 } from '@/lib/mockData';
+import {
+  getClubSettingsSnapshot,
+  patchClubSettings,
+  subscribeClubSettings,
+} from '@/lib/clubSettingsState';
 
 export function useClubBookings() {
   const [bookings, setBookings]   = useState<ClubBooking[]>(createMockClubBookings);
-  const [settings, setSettings]   = useState<ClubSettings>(MOCK_CLUB_SETTINGS);
+  const [settings, setSettings]   = useState(() => getClubSettingsSnapshot());
+
+  useEffect(() => subscribeClubSettings(() => setSettings(getClubSettingsSnapshot())), []);
   const [courts,   setCourts]     = useState<CourtWithClub[]>(MOCK_COURTS);
 
   /** Přesune rezervaci na nový start slot, volitelně i na jiný kurt */
@@ -43,9 +52,10 @@ export function useClubBookings() {
     setCourts(prev => prev.map(c => c.id === courtId ? { ...c, ...updates } : c));
   }, []);
 
-  /** Aktualizuje nastavení klubu */
+  /** Aktualizuje nastavení klubu (v sezónním režimu synchronizuje preset aktivní sezóny) */
   const updateSettings = useCallback((updates: Partial<ClubSettings>) => {
-    setSettings(prev => ({ ...prev, ...updates }));
+    const current = getClubSettingsSnapshot();
+    patchClubSettings(applySettingsPatch(current, updates));
   }, []);
 
   /** Rezervace pro konkrétní datum (bez zrušených) */
@@ -55,7 +65,12 @@ export function useClubBookings() {
 
   /** Obecná aktualizace rezervace (platba, zrušení, …) */
   const updateBooking = useCallback((id: string, updates: Partial<ClubBooking>) => {
-    setBookings(prev => prev.map(b => b.id === id ? { ...b, ...updates } : b));
+    setBookings(prev => prev.map(b => {
+      if (b.id !== id) return b;
+      const next = { ...b, ...updates };
+      if ('note' in updates && !updates.note) delete next.note;
+      return next;
+    }));
   }, []);
 
   /** Přesune rezervaci na jiný den (jen dnes nebo budoucí, do maxBookingDaysAhead) */
@@ -123,7 +138,7 @@ export function useClubBookings() {
     const count   = durationMinutes / 30;
     const newSlots = Array.from({ length: count }, (_, i) => slotMin + i);
 
-    if (Math.max(...newSlots) > settings.closingSlot) {
+    if (Math.max(...newSlots) > getEffectiveClosingSlot(booking.date, settings)) {
       return { ok: false, error: 'Délka přesahuje provozní dobu' };
     }
 
@@ -144,14 +159,16 @@ export function useClubBookings() {
     const updated: ClubBooking = {
       ...booking,
       slots: newSlots,
-      price: slotPrice(newSlots.length, pricePerHour),
+      price: Math.round(calculateSlotsPrice(
+        booking.court_id, booking.date, newSlots, pricePerHour, settings,
+      )),
       starts_at: `${booking.date}T${slotToTime(slotMin)}:00.000Z`,
       ends_at:   `${booking.date}T${slotEndTime(slotMax)}:00.000Z`,
     };
 
     setBookings(prev => prev.map(b => b.id === bookingId ? updated : b));
     return { ok: true, booking: updated };
-  }, [bookings, courts, settings.closingSlot]);
+  }, [bookings, courts, settings]);
 
   /** Vytvoří novou rezervaci (správce klubu) */
   const createBooking = useCallback((params: {
