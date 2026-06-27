@@ -3,8 +3,6 @@ import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '@/lib/theme';
 
-const W = colors.warm;
-
 const MONTH_NAMES = [
   'Leden', 'Únor', 'Březen', 'Duben', 'Květen', 'Červen',
   'Červenec', 'Srpen', 'Září', 'Říjen', 'Listopad', 'Prosinec',
@@ -34,15 +32,16 @@ function formatMMDD(mmdd: string): string {
   return `${day}. ${month}.`;
 }
 
-/** Inline kalendář pro výběr dne v roce (MM-DD, opakuje se každý rok) */
 export function MonthDayPicker({
   valueMMDD,
   accent,
   onSelect,
+  compact = false,
 }: {
   valueMMDD: string;
   accent: string;
   onSelect: (mmdd: string) => void;
+  compact?: boolean;
 }) {
   const initial = parseMMDD(valueMMDD);
   const [dispMonth, setDispMonth] = useState(initial.month - 1);
@@ -80,21 +79,23 @@ export function MonthDayPicker({
   }
 
   return (
-    <View style={s.wrap}>
+    <View style={[s.wrap, compact && s.wrapCompact]}>
       <View style={s.header}>
         <TouchableOpacity onPress={goPrev} style={s.navBtn} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-          <Ionicons name="chevron-back" size={18} color={accent} />
+          <Ionicons name="chevron-back" size={compact ? 16 : 18} color={accent} />
         </TouchableOpacity>
-        <Text style={s.monthLabel}>{MONTH_NAMES[dispMonth]}</Text>
+        <Text style={[s.monthLabel, compact && s.monthLabelCompact]}>{MONTH_NAMES[dispMonth]}</Text>
         <TouchableOpacity onPress={goNext} style={s.navBtn} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-          <Ionicons name="chevron-forward" size={18} color={accent} />
+          <Ionicons name="chevron-forward" size={compact ? 16 : 18} color={accent} />
         </TouchableOpacity>
       </View>
-      <Text style={s.hint}>Vybráno: {formatMMDD(valueMMDD)} · rok se neukládá, platí každoročně</Text>
+      {!compact && (
+        <Text style={s.hint}>Vybráno: {formatMMDD(valueMMDD)} · platí každoročně</Text>
+      )}
       <View style={s.dayLabelsRow}>
         {DAY_ABBR.map(label => (
           <View key={label} style={s.dayLabelCell}>
-            <Text style={s.dayLabelText}>{label}</Text>
+            <Text style={[s.dayLabelText, compact && s.dayLabelTextCompact]}>{label}</Text>
           </View>
         ))}
       </View>
@@ -110,11 +111,13 @@ export function MonthDayPicker({
                 activeOpacity={0.65}
                 style={[
                   s.dayCell,
-                  selected && { backgroundColor: accent, borderRadius: 6 },
+                  compact && s.dayCellCompact,
+                  selected && { backgroundColor: accent, borderRadius: 4 },
                 ]}
               >
                 <Text style={[
                   s.dayNum,
+                  compact && s.dayNumCompact,
                   !inMonth && s.dayNumFaded,
                   selected && s.dayNumActive,
                 ]}>
@@ -125,6 +128,9 @@ export function MonthDayPicker({
           })}
         </View>
       ))}
+      {compact && (
+        <Text style={s.hintCompact}>Vybráno: {formatMMDD(valueMMDD)}</Text>
+      )}
     </View>
   );
 }
@@ -138,6 +144,11 @@ const s = StyleSheet.create({
     backgroundColor: colors.surface,
     borderWidth: 1,
     borderColor: colors.border,
+  },
+  wrapCompact: {
+    marginTop: 0,
+    padding: 8,
+    borderWidth: 0,
   },
   header: {
     flexDirection: 'row',
@@ -154,6 +165,7 @@ const s = StyleSheet.create({
     fontWeight: '800',
     color: colors.textPrimary,
   },
+  monthLabelCompact: { fontSize: 12 },
   hint: {
     fontSize: 10,
     color: colors.textMuted,
@@ -161,12 +173,22 @@ const s = StyleSheet.create({
     paddingVertical: 8,
     lineHeight: 14,
   },
+  hintCompact: {
+    fontSize: 10,
+    color: colors.textMuted,
+    textAlign: 'center',
+    paddingTop: 6,
+    fontWeight: '700',
+  },
   dayLabelsRow: { flexDirection: 'row', paddingBottom: 4 },
   dayLabelCell: { flex: 1, alignItems: 'center' },
   dayLabelText: { fontSize: 9, fontWeight: '800', color: colors.textMuted, letterSpacing: 0.5 },
+  dayLabelTextCompact: { fontSize: 8 },
   gridRow: { flexDirection: 'row' },
   dayCell: { flex: 1, aspectRatio: 1, alignItems: 'center', justifyContent: 'center' },
+  dayCellCompact: { aspectRatio: undefined, height: 28 },
   dayNum: { fontSize: 13, fontWeight: '600', color: colors.textPrimary },
+  dayNumCompact: { fontSize: 11 },
   dayNumFaded: { color: colors.textDisabled },
   dayNumActive: { color: '#fff', fontWeight: '900' },
 });

@@ -1346,9 +1346,13 @@ function ClosureRangeModal({ visible, onClose, onAdd }: {
                   })}
                 </View>
               ))}
+              <Text style={s.closureNoteFieldLabel}>VLASTNÍ POZNÁMKA</Text>
+              <Text style={s.closureNoteFieldHint}>
+                Text zobrazený hráčům v termínu uzavření (volitelné)
+              </Text>
               <TextInput
                 style={s.closureNoteInput}
-                placeholder="Poznámka pro hráče (důvod uzavření)"
+                placeholder="Např. rekonstrukce kurtů, svátek klubu…"
                 placeholderTextColor={colors.textDisabled}
                 value={note}
                 onChangeText={setNote}
@@ -2443,6 +2447,21 @@ function SettingsTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
     });
   }
 
+  function updateClosurePeriod(id: string, updates: Partial<ClubClosurePeriod>) {
+    updateSettings({
+      closurePeriods: settings.closurePeriods.map(p => {
+        if (p.id !== id) return p;
+        const next = { ...p, ...updates };
+        if ('note' in updates) {
+          const trimmed = updates.note?.trim();
+          if (trimmed) next.note = trimmed;
+          else delete next.note;
+        }
+        return next;
+      }),
+    });
+  }
+
   return (
     <ScrollView contentContainerStyle={s.settingsList}>
       <Text style={s.sectionTitle}>NASTAVENÍ KLUBU</Text>
@@ -2536,9 +2555,14 @@ function SettingsTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
                         <Text style={s.closurePeriodDates}>
                           {fmtDateKey(p.fromDate)} – {fmtDateKey(p.toDate)}
                         </Text>
-                        {p.note ? (
-                          <Text style={s.closurePeriodNote}>{p.note}</Text>
-                        ) : null}
+                        <TextInput
+                          style={s.closurePeriodNoteInput}
+                          placeholder="Vlastní poznámka pro hráče (volitelné)"
+                          placeholderTextColor={colors.textDisabled}
+                          value={p.note ?? ''}
+                          onChangeText={(t) => updateClosurePeriod(p.id, { note: t })}
+                          multiline
+                        />
                       </View>
                       <TouchableOpacity
                         onPress={() => removeClosurePeriod(p.id)}
@@ -2756,12 +2780,47 @@ function SettingsTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
         <View style={s.settingCardBody}>
           <Text style={s.settingCardTitle}>Cenové kategorie</Text>
           <Text style={s.settingCardSub}>
-            {settings.seasonalModeEnabled
-              ? `Profil ${SEASON_LABELS[settings.activeSeason]} · ` : ''}
+            {settings.seasonalModeEnabled && !settings.autoSeasonByDate
+              ? `Profil ${SEASON_LABELS[settings.activeSeason]} · `
+              : settings.seasonalModeEnabled && settings.autoSeasonByDate
+                ? `Dnes ${SEASON_LABELS[getEffectiveSeasonId(todayKey, settings)]} · `
+                : ''}
             {settings.pricing.rules.length > 0
               ? `${settings.pricing.rules.length} aktivních pravidel pro kurty`
               : 'Nastavte ceny podle dnů a časových pásem'}
           </Text>
+
+          {settings.seasonalModeEnabled && !settings.autoSeasonByDate && (
+            <>
+              <Text style={s.openingLabel}>SEZÓNA CENÍKU</Text>
+              <View style={s.seasonRow}>
+                {SEASON_IDS.map(id => {
+                  const active = settings.activeSeason === id;
+                  return (
+                    <TouchableOpacity
+                      key={id}
+                      onPress={() => updateSettings(patchForSwitchSeason(settings, id))}
+                      activeOpacity={0.85}
+                      style={[s.seasonChip, active && s.seasonChipActive]}
+                    >
+                      <Ionicons
+                        name={id === 'summer' ? 'sunny' : 'snow'}
+                        size={20}
+                        color={active ? '#fff' : (id === 'summer' ? '#F59E0B' : '#6366F1')}
+                      />
+                      <Text style={[s.seasonChipTitle, active && s.seasonChipTitleActive]}>
+                        {SEASON_LABELS[id]}
+                      </Text>
+                      {active && (
+                        <Text style={s.seasonChipActiveLabel}>AKTIVNÍ</Text>
+                      )}
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </>
+          )}
+
           <TouchableOpacity
             onPress={() => setPricingModalVisible(true)}
             style={s.closureAddBtn}
@@ -2964,6 +3023,31 @@ const s = StyleSheet.create({
   },
   closurePeriodDates: { fontSize: 13, fontWeight: '800', color: colors.textPrimary },
   closurePeriodNote: { fontSize: 12, color: colors.textMuted, marginTop: 2 },
+  closurePeriodNoteInput: {
+    marginTop: 8,
+    minHeight: 44,
+    padding: 8,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+    fontSize: 12,
+    color: colors.textPrimary,
+    textAlignVertical: 'top',
+  },
+  closureNoteFieldLabel: {
+    fontSize: 10,
+    fontWeight: '900',
+    color: colors.textMuted,
+    letterSpacing: 1,
+    marginTop: 12,
+    marginBottom: 4,
+  },
+  closureNoteFieldHint: {
+    fontSize: 11,
+    color: colors.textMuted,
+    marginBottom: 8,
+    lineHeight: 16,
+  },
   closureAddBtn: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
     marginTop: 12, paddingVertical: 12, paddingHorizontal: 14,
