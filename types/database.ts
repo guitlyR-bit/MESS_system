@@ -79,6 +79,36 @@ export interface CourtCategory {
   season_id?: string;
 }
 
+/** Sport v cenové kategorii — 'all' = všechny sporty */
+export type PricingSport = 'tennis' | 'squash' | 'padel' | 'badminton' | 'all';
+
+export type PricingSeasonScope = 'year_round' | 'summer' | 'winter';
+
+export type PricingDayScope =
+  | 'weekdays'
+  | 'weekend'
+  | 'holidays'
+  | 'custom';
+
+/** Cenová kategorie — pravidlo ceny nezávislé na kurtu, s přiřazením kurtům */
+export interface PricingCategory {
+  id: string;
+  name: string;
+  sport: PricingSport;
+  price_per_hour: number;
+  /** Celý den nebo časové rozmezí */
+  all_day: boolean;
+  time_from_slot?: number;
+  time_to_slot?: number;
+  day_scope: PricingDayScope;
+  /** Pouze pokud day_scope === 'custom' — [Po,Út,St,Čt,Pá,So,Ne] */
+  weekdays?: boolean[];
+  season_scope: PricingSeasonScope;
+  court_ids: string[];
+  is_active: boolean;
+  sort_order?: number;
+}
+
 export interface Court {
   id: string;
   club_id: string;
@@ -90,6 +120,8 @@ export interface Court {
   price_per_hour: number;
   capacity: number;       // max hráčů
   category_id?: string;
+  /** Přiřazené aktivní cenové kategorie (sync s PricingCategory.court_ids) */
+  pricing_category_ids?: string[];
   description?: string | null;
   created_at: string;
 }
@@ -273,8 +305,10 @@ export interface ClubSettings {
   categoryOpeningSchedule?: Record<string, OpeningSchedule>;
   /** Denní výjimky provozní doby per kategorie — categoryId → dateKey → override */
   categoryDayOverrides?: Record<string, Record<string, DayHoursPartialOverride>>;
-  /** Ceník per kategorie — pravidla s categoryId se aplikují na všechny kurty v kategorii */
+  /** @deprecated Použijte pricingCategories */
   categoryPricing?: Record<string, ClubPricing>;
+  /** Cenové kategorie klubu — nezávislá pravidla s přiřazením kurtům */
+  pricingCategories?: PricingCategory[];
   /** Pořadí nezařazených kurtů (category order = pořadí v categories[], court order = court_ids[]) */
   uncategorizedCourtOrder?: string[];
 }

@@ -15,9 +15,13 @@ import {
   syncUncategorizedCourtOrder,
   getUncategorizedCourts,
 } from '@/lib/clubCategories';
+import {
+  syncPricingCategoriesForCourt,
+} from '@/lib/pricing';
 import type {
   ClubBooking, ClubSettings, CourtWithClub, DayHoursPartialOverride, PaymentStatus,
   CourtCategory, ClubPricing, OpeningSchedule, CourtSurface, SportType, Season,
+  PricingCategory,
 } from '@/types/database';
 import {
   createMockClubBookings,
@@ -181,6 +185,7 @@ export function useClubBookings() {
     price_per_hour?: number;
     capacity?: number;
     categoryId?: string | null;
+    pricingCategoryIds?: string[];
   }): CourtWithClub | null => {
     const trimmedName = params.name.trim();
     if (!trimmedName) return null;
@@ -211,6 +216,7 @@ export function useClubBookings() {
       price_per_hour: pricePerHour,
       capacity: params.capacity ?? 4,
       category_id: params.categoryId ?? undefined,
+      pricing_category_ids: params.pricingCategoryIds ?? [],
       available_today: 0,
       created_at: new Date().toISOString(),
     };
@@ -228,6 +234,18 @@ export function useClubBookings() {
           current.uncategorizedCourtOrder,
         ),
       });
+    }
+
+    if (params.pricingCategoryIds?.length) {
+      const synced = syncPricingCategoriesForCourt(
+        getClubSettingsSnapshot(),
+        id,
+        params.pricingCategoryIds,
+      );
+      patchClubSettings({ pricingCategories: synced });
+      setCourts(prev => prev.map(c =>
+        c.id === id ? { ...c, pricing_category_ids: params.pricingCategoryIds } : c,
+      ));
     }
 
     return newCourt;
@@ -275,7 +293,52 @@ export function useClubBookings() {
     });
   }, []);
 
-  /** Uloží ceník kategorie a synchronizuje price_per_hour na kurtech v ní */
+  /** Uloží nebo aktualizuje cenovou kategorii */
+  const savePricingCategory = useCallback((category: PricingCategory) => {
+    const current = getClubSettingsSnapshot();
+    const exists = current.pricingCategories?.some(c => c.id === category.id);
+    const next = exists
+      ? (current.pricingCategories ?? []).map(c => c.id === category.id ? category : c)
+      : [...(current.pricingCategories ?? []), category];
+    patchClubSettings({ pricingCategories: next });
+
+    setCourts(prev => prev.map(court => {
+      const inCategory = category.court_ids.includes(court.id);
+      const ids = court.pricing_category_ids ?? [];
+      const hasId = ids.includes(category.id);
+      if (inCategory && !hasId) {
+        return { ...court, pricing_category_ids: [...ids, category.id] };
+      }
+      if (!inCategory && hasId) {
+        return { ...court, pricing_category_ids: ids.filter(id => id !== category.id) };
+      }
+      return court;
+    }));
+  }, []);
+
+  /** Smaže cenovou kategorii a odebere ji z kurtů */
+  const deletePricingCategory = useCallback((categoryId: string) => {
+    const current = getClubSettingsSnapshot();
+    patchClubSettings({
+      pricingCategories: (current.pricingCategories ?? []).filter(c => c.id !== categoryId),
+    });
+    setCourts(prev => prev.map(c => ({
+      ...c,
+      pricing_category_ids: (c.pricing_category_ids ?? []).filter(id => id !== categoryId),
+    })));
+  }, []);
+
+  /** Přiřadí cenové kategorie kurtu (obousměrná sync court_ids) */
+  const assignPricingCategoriesToCourt = useCallback((courtId: string, categoryIds: string[]) => {
+    const current = getClubSettingsSnapshot();
+    const synced = syncPricingCategoriesForCourt(current, courtId, categoryIds);
+    patchClubSettings({ pricingCategories: synced });
+    setCourts(prev => prev.map(c =>
+      c.id === courtId ? { ...c, pricing_category_ids: categoryIds } : c,
+    ));
+  }, []);
+
+  /** @deprecated Použijte pricingCategories */
   const updateCategoryPricing = useCallback((categoryId: string, pricing: ClubPricing) => {
     const current = getClubSettingsSnapshot();
     patchClubSettings({
@@ -357,6 +420,7 @@ export function useClubBookings() {
       ends_at:   `${original.date}T${slotEndTime(slotMax)}:00.000Z`,
       price: Math.round(calculateSlotsPrice(
         original.court_id, original.date, original.slots, pricePerHour, settings,
+        court?.sport,
       )),
     };
 
@@ -465,6 +529,7 @@ export function useClubBookings() {
       slots: newSlots,
       price: Math.round(calculateSlotsPrice(
         booking.court_id, booking.date, newSlots, pricePerHour, settings,
+        court?.sport,
       )),
       starts_at: `${booking.date}T${slotToTime(slotMin)}:00.000Z`,
       ends_at:   `${booking.date}T${slotEndTime(slotMax)}:00.000Z`,
@@ -531,6 +596,7 @@ export function useClubBookings() {
     updateCourt, createCourt, updateSettings, updateSeason,
     setDayOverride, clearDayOverride, setCategoryDayOverride, clearCategoryDayOverride,
     updateCategories, saveCategory, deleteCategory, addCategory, updateCategoryPricing,
+    savePricingCategory, deletePricingCategory, assignPricingCategoriesToCourt,
     updateCategoryOpeningSchedule,
     reorderCategories, reorderCourtsInCategory, reorderUncategorizedCourts,
     getBookingsForDate, canPlayerEdit,

@@ -7,6 +7,7 @@ import type {
   PriceDayScope,
   WeekdayIndex,
   HolidayTreatment,
+  SportType,
 } from '@/types/database';
 import { slotToTime, slotEndTime, SLOT_COUNT, localDateKey } from '@/lib/mockData';
 import { isCzechPublicHoliday } from '@/lib/czechHolidays';
@@ -20,6 +21,11 @@ import {
   settingsWithCategorySchedule,
   getCourtIdsInCategory,
 } from '@/lib/clubCategories';
+import {
+  getSlotPricePerHourFromCategories,
+  calculateSlotsPriceFromCategories,
+  isPricingCategoryEffective,
+} from '@/lib/pricing';
 export const WEEKDAY_NAMES = ['Pondělí', 'Úterý', 'Středa', 'Čtvrtek', 'Pátek', 'Sobota', 'Neděle'];
 export const WEEKDAY_SHORT = ['Po', 'Út', 'St', 'Čt', 'Pá', 'So', 'Ne'];
 
@@ -217,7 +223,18 @@ export function getSlotPricePerHour(
   slotIdx: number,
   basePricePerHour: number,
   settings: ClubSettings,
+  courtSport?: SportType,
 ): number {
+  if (courtSport && (settings.pricingCategories?.length ?? 0) > 0) {
+    const fromCategories = getSlotPricePerHourFromCategories(
+      courtId, courtSport, dateKey, slotIdx, basePricePerHour, settings,
+    );
+    const hasEffectiveCourtCategory = settings.pricingCategories!.some(c =>
+      isPricingCategoryEffective(c, settings, dateKey) && c.court_ids.includes(courtId),
+    );
+    if (hasEffectiveCourtCategory) return fromCategories;
+  }
+
   const rule = findPriceRule(courtId, dateKey, settings);
   if (!rule || rule.bands.length === 0) return basePricePerHour;
 
@@ -232,7 +249,19 @@ export function calculateSlotsPrice(
   slots: number[],
   basePricePerHour: number,
   settings: ClubSettings,
+  courtSport?: SportType,
 ): number {
+  if (courtSport && (settings.pricingCategories?.length ?? 0) > 0) {
+    const hasCourtCategories = settings.pricingCategories!.some(c =>
+      isPricingCategoryEffective(c, settings, dateKey) && c.court_ids.includes(courtId),
+    );
+    if (hasCourtCategories) {
+      return calculateSlotsPriceFromCategories(
+        courtId, courtSport, dateKey, slots, basePricePerHour, settings,
+      );
+    }
+  }
+
   return slots.reduce((sum, slot) => {
     const hourly = getSlotPricePerHour(courtId, dateKey, slot, basePricePerHour, settings);
     return sum + hourly * 0.5;

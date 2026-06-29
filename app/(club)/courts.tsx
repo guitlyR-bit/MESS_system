@@ -3,7 +3,7 @@
  *
  * Tab PŘEHLED  — časová osa všech kurtů; přetažením slot přesunete rezervaci
  * Tab KURTY    — kategorie kurtů, přiřazení, editace detailů kurtů
- * Tab NASTAVENÍ — provozní doba, ceník a uzavření per kategorie (+ globální fallback)
+ * Tab NASTAVENÍ — provozní doba, cenové kategorie a uzavření
  */
 
 import React, { useState, useRef, useCallback, useMemo, useEffect } from 'react';
@@ -23,7 +23,7 @@ import {
   MOCK_REGISTERED_PLAYERS, registeredPlayerFullName, slotDuration,
 } from '@/lib/mockData';
 import type { RegisteredPlayer } from '@/lib/mockData';
-import type { ClubBooking, CourtWithClub, CourtSurface, SportType, PaymentStatus, ClubClosurePeriod, ClubSettings, DayHoursPartialOverride, CourtCategory } from '@/types/database';
+import type { ClubBooking, CourtWithClub, CourtSurface, SportType, PaymentStatus, ClubClosurePeriod, ClubSettings, DayHoursPartialOverride, CourtCategory, PricingCategory } from '@/types/database';
 import {
   getEffectiveClosingSlot,
   getOpeningSlotForDate,
@@ -69,12 +69,20 @@ import {
   patchForEnableSeasonalMode, patchForDisableSeasonalMode, patchForSwitchSeason,
   mergeSettingsForDate, getEffectiveSeasonId, isCourtSeasonallyClosed,
 } from '@/lib/clubSeason';
+import { CourtCategoryEditModal } from '@/components/club/CourtCategoryEditModal';
 import { OpeningHoursModal } from '@/components/club/OpeningHoursModal';
-import { CourtPricingModal } from '@/components/club/CourtPricingModal';
+import { PricingCategoryModal } from '@/components/club/PricingCategoryModal';
 import { SeasonPeriodEditor } from '@/components/club/SeasonPeriodEditor';
 import { ClosureExceptionModal } from '@/components/club/ClosureExceptionModal';
 import { DayHoursOverrideModal } from '@/components/club/DayHoursOverrideModal';
-import { CourtCategoryEditModal } from '@/components/club/CourtCategoryEditModal';
+import {
+  formatPricingCategorySummary,
+  getAssignablePricingCategories,
+  getPricingCategoryIdsForCourt,
+  isPricingCategoryEffective,
+  isPricingCategorySeasonEffective,
+  resolvePricingCategoryColorHex,
+} from '@/lib/pricing';
 
 /** Konec vizuálního bloku na časové ose (stejná geometrie jako render) */
 function bookingDisplayEndMinutes(booking: ClubBooking): number {
@@ -1714,7 +1722,7 @@ function ClubBookingCreateModal({ court, date, slotIdx, closingSlot, settings, o
   const slots    = slotsForDuration(slotIdx, durationMinutes);
   const slotMax  = Math.max(...slots);
   const price    = Math.round(calculateSlotsPrice(
-    courtData.id, dateKey, slots, courtData.price_per_hour, settings,
+    courtData.id, dateKey, slots, courtData.price_per_hour, settings, courtData.sport,
   ));
   const durationValid = isDurationValid(durationMinutes, slotIdx, closingSlot, occupiedSlots);
   const playerValid = playerMode === 'manual'
@@ -2319,7 +2327,7 @@ function CourtListItem({
 function CourtsTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
   const {
     courts, updateCourt, createCourt, settings, saveCategory, deleteCategory,
-    bookings, updateSettings,
+    bookings, updateSettings, assignPricingCategoriesToCourt,
     reorderCategories, reorderCourtsInCategory, reorderUncategorizedCourts,
   } = hook;
   const [editingCourt, setEditingCourt] = useState<CourtWithClub | null>(null);
@@ -2453,8 +2461,8 @@ function CourtsTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
       </View>
       <Text style={s.courtsTabHint}>
         {settings.seasonalModeEnabled
-          ? 'Seskupte kurty do kategorií podle sezóny. Provozní dobu, ceník a uzavření nastavíte v záložce Nastavení.'
-          : 'Seskupte kurty do kategorií. Provozní dobu, ceník a uzavření nastavíte v záložce Nastavení.'}
+          ? 'Seskupte kurty do kategorií podle sezóny. Cenové kategorie a provoz nastavíte v záložce Nastavení.'
+          : 'Seskupte kurty do kategorií. Cenové kategorie a provoz nastavíte v záložce Nastavení.'}
       </Text>
       <Text style={s.reorderHint}>
         Pořadí kategorií a kurtů přetáhněte ikonou ≡ — projeví se i v záložce Přehled.
@@ -2565,6 +2573,7 @@ function CourtsTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
           isCreate
           categories={settings.categories}
           settings={settings}
+          courts={courts}
           bookings={bookings}
           updateSettings={updateSettings}
           onSave={(data) => {
@@ -2580,6 +2589,7 @@ function CourtsTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
           court={editingCourt}
           uncategorized={!editingCourt.category_id && !settings.categories.some(c => c.court_ids.includes(editingCourt.id))}
           settings={settings}
+          courts={courts}
           bookings={bookings}
           updateSettings={updateSettings}
           onSave={(updates) => {
@@ -2590,6 +2600,9 @@ function CourtsTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
               is_indoor: updates.is_indoor,
               capacity: updates.capacity,
             });
+            if (updates.pricingCategoryIds) {
+              assignPricingCategoriesToCourt(editingCourt.id, updates.pricingCategoryIds);
+            }
             setEditingCourt(null);
           }}
           onClose={() => setEditingCourt(null)}
@@ -2620,6 +2633,7 @@ function CourtEditModal({
   court,
   isCreate = false,
   categories = [],
+  courts = [],
   uncategorized,
   settings,
   bookings,
@@ -2630,6 +2644,7 @@ function CourtEditModal({
   court?: CourtWithClub;
   isCreate?: boolean;
   categories?: CourtCategory[];
+  courts?: CourtWithClub[];
   uncategorized?: boolean;
   settings: ClubSettings;
   bookings: ClubBooking[];
@@ -2641,6 +2656,7 @@ function CourtEditModal({
     is_indoor: boolean;
     capacity: number;
     categoryId?: string | null;
+    pricingCategoryIds?: string[];
   }) => void;
   onClose: () => void;
 }) {
@@ -2652,7 +2668,26 @@ function CourtEditModal({
   const [categoryId, setCategoryId] = useState<string | null>(
     isCreate ? null : (court?.category_id ?? null),
   );
+  const todayKey = localDateKey();
+  const [pricingCategoryIds, setPricingCategoryIds] = useState<string[]>(
+    court ? getPricingCategoryIdsForCourt(settings, court.id) : [],
+  );
   const [closureModalVisible, setClosureModalVisible] = useState(false);
+
+  const assignablePricing = useMemo(
+    () => getAssignablePricingCategories(settings, sport, todayKey),
+    [settings, sport, todayKey],
+  );
+
+  useEffect(() => {
+    const allowed = new Set(assignablePricing.map(c => c.id));
+    setPricingCategoryIds(prev => prev.filter(id => allowed.has(id)));
+  }, [assignablePricing]);
+
+  useEffect(() => {
+    const valid = new Set(getAssignablePricingCategories(settings, sport).map(c => c.id));
+    setPricingCategoryIds(prev => prev.filter(id => valid.has(id)));
+  }, [sport, settings.pricingCategories]);
 
   const courtClosures = useMemo(
     () => (court ? getCourtClosurePeriods(court.id, settings) : []),
@@ -2670,6 +2705,12 @@ function CourtEditModal({
     setCategoryId(id);
   }
 
+  function togglePricingCategory(id: string) {
+    setPricingCategoryIds(prev =>
+      prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id],
+    );
+  }
+
   function handleSave() {
     if (!nameValid) {
       Alert.alert('Chybí název', 'Zadejte název kurtu.');
@@ -2682,6 +2723,7 @@ function CourtEditModal({
       is_indoor: isIndoor,
       capacity,
       ...(isCreate ? { categoryId } : {}),
+      pricingCategoryIds,
     });
   }
 
@@ -2810,6 +2852,40 @@ function CourtEditModal({
                 </TouchableOpacity>
               </View>
 
+              <Text style={s.fieldLabel}>CENOVÉ KATEGORIE</Text>
+              <Text style={s.courtCreateCategoryHint}>
+                Zobrazují se jen kategorie efektivně aktivní pro aktuální sezónu a sport kurtu.
+              </Text>
+              {assignablePricing.length === 0 ? (
+                <Text style={s.emptyCategoryHint}>
+                  Žádné aktivní kategorie pro {SPORTS.find(sp => sp.value === sport)?.label ?? sport}.
+                </Text>
+              ) : (
+                assignablePricing.map(cat => {
+                  const catColor = resolvePricingCategoryColorHex(cat.color);
+                  const selected = pricingCategoryIds.includes(cat.id);
+                  return (
+                    <TouchableOpacity
+                      key={cat.id}
+                      onPress={() => togglePricingCategory(cat.id)}
+                      style={s.pricingCatRow}
+                      activeOpacity={0.7}
+                    >
+                      <View style={[s.pricingCatColorBar, { backgroundColor: catColor }]} />
+                      <Ionicons
+                        name={selected ? 'checkbox' : 'square-outline'}
+                        size={20}
+                        color={selected ? catColor : colors.textMuted}
+                      />
+                      <View style={{ flex: 1 }}>
+                        <Text style={s.pricingCatName}>{cat.name}</Text>
+                        <Text style={s.pricingCatMeta}>{formatPricingCategorySummary(cat)}</Text>
+                      </View>
+                    </TouchableOpacity>
+                  );
+                })
+              )}
+
               {!isCreate && (
               <View style={s.courtClosureSection}>
                 <Text style={s.fieldLabel}>DOČASNÉ UZAVŘENÍ</Text>
@@ -2902,7 +2978,8 @@ function SettingsTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
   const {
     settings, updateSettings, updateSeason, courts, bookings,
     setDayOverride, clearDayOverride, setCategoryDayOverride, clearCategoryDayOverride,
-    updateCategoryPricing, updateCategoryOpeningSchedule,
+    updateCategoryOpeningSchedule,
+    savePricingCategory, deletePricingCategory,
   } = hook;
   const [closureModalVisible, setClosureModalVisible] = useState(false);
   const [closuresExpanded, setClosuresExpanded] = useState(false);
@@ -2911,7 +2988,7 @@ function SettingsTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
   const [openingModalVisible, setOpeningModalVisible] = useState(false);
   const [openingCategoryId, setOpeningCategoryId] = useState<string | null>(null);
   const [pricingModalVisible, setPricingModalVisible] = useState(false);
-  const [pricingCategoryId, setPricingCategoryId] = useState<string | null>(null);
+  const [editingPricingCategory, setEditingPricingCategory] = useState<PricingCategory | null>(null);
   const [earlyCloseError, setEarlyCloseError] = useState<string | null>(null);
   const [seasonFilter, setSeasonFilter] = useState<string | null>(() =>
     getActiveCalendarSeason(hook.settings.seasons ?? [], localDateKey())?.id ?? null,
@@ -3608,13 +3685,94 @@ function SettingsTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
         </View>
       </View>
 
-      {/* Provoz a ceník kategorií */}
+      {/* Cenové kategorie */}
+      <View style={s.settingCard}>
+        <View style={[s.settingCardBar, { backgroundColor: W.orange }]} />
+        <View style={s.settingCardBody}>
+          <Text style={s.settingCardTitle}>Cenové kategorie</Text>
+          <Text style={s.settingCardSub}>
+            Pravidla ceny nezávisle na kurtu — přiřaďte je kurtům v záložce Kurty.
+            Cena rezervace se počítá podle data, času a sportu.
+          </Text>
+
+          {(settings.pricingCategories ?? []).length > 0 ? (
+            (settings.pricingCategories ?? [])
+              .slice()
+              .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
+              .map(cat => {
+                const catColor = resolvePricingCategoryColorHex(cat.color);
+                const effective = isPricingCategoryEffective(cat, settings, todayKey);
+                const seasonMismatch = cat.is_active
+                  && settings.seasonalModeEnabled
+                  && cat.season_scope !== 'year_round'
+                  && !isPricingCategorySeasonEffective(cat, settings, todayKey);
+                return (
+                  <View
+                    key={cat.id}
+                    style={[s.pricingCategorySettingsRow, !effective && s.pricingCategoryRowDimmed]}
+                  >
+                    <View style={[s.pricingCategoryColorBar, { backgroundColor: catColor }]} />
+                    <TouchableOpacity
+                      style={{ flex: 1 }}
+                      onPress={() => {
+                        setEditingPricingCategory(cat);
+                        setPricingModalVisible(true);
+                      }}
+                      activeOpacity={0.7}
+                    >
+                      <View style={s.pricingCategoryTitleRow}>
+                        <Text style={s.closurePeriodDates}>{cat.name}</Text>
+                        <Text style={s.pricingCategoryPrice}>{cat.price_per_hour} Kč/hod</Text>
+                        {seasonMismatch && (
+                          <View style={s.seasonScopeBadge}>
+                            <Text style={s.seasonScopeBadgeText}>Neplatí v této sezóně</Text>
+                          </View>
+                        )}
+                        {!cat.is_active && (
+                          <View style={s.inactivePricingBadge}>
+                            <Text style={s.inactivePricingBadgeText}>NEAKTIVNÍ</Text>
+                          </View>
+                        )}
+                      </View>
+                      <Text style={s.dayOverrideHours}>{formatPricingCategorySummary(cat)}</Text>
+                      <Text style={s.dayOverrideHours}>
+                        {cat.court_ids.length} {cat.court_ids.length === 1 ? 'kurt' : cat.court_ids.length < 5 ? 'kurty' : 'kurtů'}
+                      </Text>
+                    </TouchableOpacity>
+                    <Switch
+                      value={cat.is_active}
+                      onValueChange={v => savePricingCategory({ ...cat, is_active: v })}
+                      trackColor={{ false: colors.border, true: catColor }}
+                      thumbColor="#fff"
+                    />
+                  </View>
+                );
+              })
+          ) : (
+            <Text style={s.emptyCategoryHint}>Zatím nemáte žádné cenové kategorie.</Text>
+          )}
+
+          <TouchableOpacity
+            onPress={() => {
+              setEditingPricingCategory(null);
+              setPricingModalVisible(true);
+            }}
+            style={s.closureAddBtn}
+            activeOpacity={0.8}
+          >
+            <Ionicons name="add-circle-outline" size={16} color={W.orange} />
+            <Text style={[s.closureAddBtnText, { color: W.orange }]}>Nová cenová kategorie</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+
+      {/* Provoz kategorií */}
       <View style={s.settingCard}>
         <View style={[s.settingCardBar, { backgroundColor: '#6366F1' }]} />
         <View style={s.settingCardBody}>
-          <Text style={s.settingCardTitle}>Provoz a ceník kategorií</Text>
+          <Text style={s.settingCardTitle}>Provoz kategorií</Text>
           <Text style={s.settingCardSub}>
-            Parametry nastavujete pro kategorie — kurty v nich dědí provozní dobu a ceník.
+            Parametry nastavujete pro kategorie — kurty v nich dědí provozní dobu.
             Globální výchozí rozvrh platí jako fallback.
           </Text>
 
@@ -3687,7 +3845,6 @@ function SettingsTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
                 const catCourts = courtsInCategory(courts, cat.id, settings);
                 const hasCustomSchedule = !!settings.categoryOpeningSchedule?.[cat.id];
                 const schedule = getCategoryOpeningSchedule(settings, cat.id);
-                const pricingRules = settings.categoryPricing?.[cat.id]?.rules.length ?? 0;
                 const seasonName = getCategorySeasonLabel(settings, cat.season_id);
                 return (
                   <View key={cat.id} style={s.categorySettingsRow}>
@@ -3701,7 +3858,6 @@ function SettingsTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
                         Provoz: {hasCustomSchedule
                           ? formatDayHours(schedule.default)
                           : 'Globální výchozí'}
-                        {' · '}Ceník: {pricingRules > 0 ? `${pricingRules} pravidel` : 'Nenastaveno'}
                       </Text>
                     </View>
                     <TouchableOpacity
@@ -3709,12 +3865,6 @@ function SettingsTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
                       style={s.categorySettingsBtn}
                     >
                       <Ionicons name="time-outline" size={18} color={W.amber} />
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      onPress={() => { setPricingCategoryId(cat.id); setPricingModalVisible(true); }}
-                      style={s.categorySettingsBtn}
-                    >
-                      <Ionicons name="pricetag-outline" size={18} color={W.orange} />
                     </TouchableOpacity>
                   </View>
                 );
@@ -3769,15 +3919,31 @@ function SettingsTab({ hook }: { hook: ReturnType<typeof useClubBookings> }) {
         }}
       />
 
-      <CourtPricingModal
+      <PricingCategoryModal
         visible={pricingModalVisible}
-        courts={courts}
+        category={editingPricingCategory}
         settings={settings}
-        initialCategoryId={pricingCategoryId ?? undefined}
-        categoryOnly
-        onClose={() => { setPricingModalVisible(false); setPricingCategoryId(null); }}
-        onSave={(pricing) => updateSettings({ pricing })}
-        onSaveCategory={updateCategoryPricing}
+        courts={courts}
+        onClose={() => { setPricingModalVisible(false); setEditingPricingCategory(null); }}
+        onSave={savePricingCategory}
+        onDelete={(id) => {
+          Alert.alert(
+            'Smazat kategorii',
+            'Opravdu smazat tuto cenovou kategorii?',
+            [
+              { text: 'Zrušit', style: 'cancel' },
+              {
+                text: 'Smazat',
+                style: 'destructive',
+                onPress: () => {
+                  deletePricingCategory(id);
+                  setPricingModalVisible(false);
+                  setEditingPricingCategory(null);
+                },
+              },
+            ],
+          );
+        }}
       />
 
       <View style={{ height: 32 }} />
@@ -4221,6 +4387,34 @@ const s = StyleSheet.create({
     paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: colors.border,
   },
   categorySettingsBtn: { padding: 10 },
+  pricingCategorySettingsRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: colors.border,
+  },
+  pricingCategoryRowDimmed: { opacity: 0.5 },
+  pricingCategoryColorBar: { width: 4, alignSelf: 'stretch', minHeight: 44 },
+  pricingCategoryTitleRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+  },
+  pricingCategoryPrice: { fontSize: 12, fontWeight: '800', color: W.orange },
+  seasonScopeBadge: {
+    paddingHorizontal: 6, paddingVertical: 2,
+    backgroundColor: '#FFFBEB', borderWidth: 1, borderColor: '#FDE68A',
+  },
+  seasonScopeBadgeText: { fontSize: 8, fontWeight: '900', color: W.amber, letterSpacing: 0.5 },
+  inactivePricingBadge: {
+    backgroundColor: 'rgba(107,114,128,0.15)',
+    paddingHorizontal: 6, paddingVertical: 2,
+    borderWidth: 1, borderColor: colors.border,
+  },
+  inactivePricingBadgeText: { fontSize: 8, fontWeight: '900', color: colors.textMuted, letterSpacing: 0.5 },
+  pricingCatRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: colors.border,
+  },
+  pricingCatColorBar: { width: 4, height: 36 },
+  pricingCatName: { fontSize: 13, fontWeight: '800', color: colors.textPrimary },
+  pricingCatMeta: { fontSize: 11, color: colors.textMuted, marginTop: 2, lineHeight: 16 },
   uncategorizedWarning: {
     flexDirection: 'row', gap: 8, alignItems: 'flex-start',
     marginTop: 12, padding: 10, backgroundColor: '#FFFBEB',

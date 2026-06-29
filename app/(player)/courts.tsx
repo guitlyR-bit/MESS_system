@@ -91,6 +91,7 @@ export default function PlayerCourtsScreen() {
       slots:      selectedSlots,
       price:      Math.round(calculateSlotsPrice(
         selectedCourt.id, dateKey, selectedSlots, selectedCourt.price_per_hour, clubSettings,
+        selectedCourt.sport,
       )),
     });
     setView('confirm');
@@ -399,7 +400,7 @@ function SlotsView({
   }
 
   const totalPrice   = Math.round(calculateSlotsPrice(
-    court.id, dateKey, selectedSlots, court.price_per_hour, clubSettings,
+    court.id, dateKey, selectedSlots, court.price_per_hour, clubSettings, court.sport,
   ));
   const duration     = slotDuration(selectedSlots.length);
   const bookingLabel = selectedSlots.length > 0
@@ -568,7 +569,7 @@ function ConfirmView({ court, date, slots, clubSettings, onClose, onNewBooking }
   const selMin     = Math.min(...slots);
   const selMax     = Math.max(...slots);
   const totalPrice = Math.round(calculateSlotsPrice(
-    court.id, localDateKey(date), slots, court.price_per_hour, clubSettings,
+    court.id, localDateKey(date), slots, court.price_per_hour, clubSettings, court.sport,
   ));
 
   return (

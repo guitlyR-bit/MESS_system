@@ -7,6 +7,7 @@ import {
   cloneCategoryDayOverrides,
   cloneCategoryPricing,
 } from '@/lib/clubCategories';
+import { clonePricingCategories } from '@/lib/pricing';
 
 function cloneSettings(src: ClubSettings): ClubSettings {
   return {
@@ -17,6 +18,7 @@ function cloneSettings(src: ClubSettings): ClubSettings {
     categoryOpeningSchedule: cloneCategoryOpeningSchedules(src.categoryOpeningSchedule),
     categoryDayOverrides: cloneCategoryDayOverrides(src.categoryDayOverrides),
     categoryPricing: cloneCategoryPricing(src.categoryPricing),
+    pricingCategories: clonePricingCategories(src.pricingCategories),
     openingSchedule: {
       ...src.openingSchedule,
       byDay: { ...src.openingSchedule.byDay },
