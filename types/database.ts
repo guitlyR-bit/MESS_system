@@ -23,7 +23,33 @@ export interface Club {
   phone?: string | null;
   email?: string | null;
   website?: string | null;
+  instagram?: string | null;
   logo_url?: string | null;
+  cover_image_url?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  /** Platba hotově na místě */
+  accepts_cash?: boolean;
+  /** Platba kartou */
+  accepts_card?: boolean;
+  /** Akceptace Multisport karet */
+  accepts_multisport?: boolean;
+  /** Psi v areálu klubu */
+  allows_dogs?: boolean;
+  /** Pití a občerstvení k dispozici */
+  offers_food_drinks?: boolean;
+  /** Popis jídla a pití v klubu */
+  food_drinks_description?: string | null;
+  /** Půjčování sportovního vybavení */
+  offers_equipment_rental?: boolean;
+  /** Co lze zapůjčit */
+  equipment_rental_description?: string | null;
+  /** Prodej sportovního vybavení */
+  sells_sport_equipment?: boolean;
+  /** Prodej sportovního oblečení */
+  sells_clothing?: boolean;
+  /** Doplňující popis služeb klubu */
+  services_description?: string | null;
   owner_id: string;
   created_at: string;
   updated_at: string;

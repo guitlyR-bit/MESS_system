@@ -2,13 +2,16 @@ import { View } from 'react-native';
 import { Tabs } from 'expo-router';
 import { colors } from '@/lib/theme';
 import { AppHeader } from '@/components/ui/AppHeader';
+import { useClubProfile } from '@/hooks/useClubProfile';
 
 const A = colors.club.accent;
 
 export default function ClubLayout() {
+  const { profile } = useClubProfile();
+
   return (
     <View style={{ flex: 1, backgroundColor: colors.bgAlt }}>
-      <AppHeader roleLabel="Klub" currentRole="club" accent={A} userName="TK Meteor Praha" />
+      <AppHeader roleLabel="Klub" currentRole="club" accent={A} userName={profile.name} />
       <Tabs
         screenOptions={{
           headerShown: false,

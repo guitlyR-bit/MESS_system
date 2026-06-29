@@ -3,7 +3,7 @@
  * Nahrazuje volání Supabase — bude vyměněno za reálné API
  */
 
-import type { CourtWithClub, BookingWithCourt, SportType, ClubBooking, ClubSettings, PaymentStatus, CourtCategory, Season } from '@/types/database';
+import type { Club, CourtWithClub, BookingWithCourt, SportType, ClubBooking, ClubSettings, PaymentStatus, CourtCategory, Season } from '@/types/database';
 
 // ─── Sportoviště (venues / kluby) ─────────────────────────────────────────────
 
@@ -22,9 +22,9 @@ export interface Venue {
 export const MOCK_VENUES: Venue[] = [
   {
     id: 'club1',
-    name: 'TK Sparta Praha',
-    city: 'Praha 7',
-    address: 'Milady Horákové 98',
+    name: 'TK Meteor Praha',
+    city: 'Praha 10',
+    address: 'U Meteoru 6',
     sports: ['tennis'],
     courtCount: 2,
     priceFrom: 250,
@@ -131,13 +131,44 @@ export const MOCK_COURT_CATEGORIES: CourtCategory[] = [
   },
 ];
 
-// ─── Sportoviště ──────────────────────────────────────────────────────────────
+/** Profil spravovaného klubu (záložka Profil) */
+export const MOCK_CLUB_PROFILE: Club = {
+  id: 'club1',
+  name: 'TK Meteor Praha',
+  slug: 'tk-meteor-praha',
+  description: 'Tenisový klub s venkovními i halovými kurty v Praze.',
+  address: 'U Meteoru 6',
+  city: 'Praha 10',
+  country: 'Česko',
+  phone: '+420 274 123 456',
+  email: 'info@tkmeteor.cz',
+  website: 'https://www.tkmeteor.cz',
+  instagram: 'tkmeteorpraha',
+  logo_url: null,
+  cover_image_url: null,
+  latitude: 50.0755,
+  longitude: 14.4378,
+  accepts_cash: true,
+  accepts_card: true,
+  accepts_multisport: true,
+  allows_dogs: false,
+  offers_food_drinks: true,
+  food_drinks_description: 'Automat s pitím, káva a čaj v recepci.',
+  offers_equipment_rental: true,
+  equipment_rental_description: 'Tenisové rakety a košíčky na recepci.',
+  sells_sport_equipment: false,
+  sells_clothing: false,
+  services_description: null,
+  owner_id: 'owner1',
+  created_at: '2024-01-01T00:00:00.000Z',
+  updated_at: '2024-01-01T00:00:00.000Z',
+};
 
 export const MOCK_COURTS: CourtWithClub[] = [
   {
     id: 'c1',
     club_id: 'club1',
-    club_name: 'TK Sparta Praha',
+    club_name: 'TK Meteor Praha',
     club_city: 'Praha 7',
     name: 'Dvorec 1',
     sport: 'tennis',
@@ -153,7 +184,7 @@ export const MOCK_COURTS: CourtWithClub[] = [
   {
     id: 'c2',
     club_id: 'club1',
-    club_name: 'TK Sparta Praha',
+    club_name: 'TK Meteor Praha',
     club_city: 'Praha 7',
     name: 'Dvorec 2',
     sport: 'tennis',
@@ -298,7 +329,7 @@ export const MOCK_MY_BOOKINGS: BookingWithCourt[] = [
     court_id: 'c1',
     court_name: 'Dvorec 1',
     court_sport: 'tennis',
-    club_name: 'TK Sparta Praha',
+    club_name: 'TK Meteor Praha',
     club_city: 'Praha 7',
     player_id: 'player1',
     starts_at: todayISO(1, 10),

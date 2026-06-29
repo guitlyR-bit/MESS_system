@@ -19,7 +19,7 @@ export default function HomeScreen() {
             <Button label="Přihlásit se" />
           </Link>
           <Link href="/club" asChild>
-            <Button label="Správa klubu" variant="outline" />
+            <Button label="Správa klubu" variant="secondary" />
           </Link>
         </Card>
       </View>

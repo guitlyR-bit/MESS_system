@@ -97,7 +97,7 @@ export function AppHeader({
         onRequestClose={() => setOpen(false)}
       >
         {/* Průhledný overlay — klik mimo zavře */}
-        <Pressable style={StyleSheet.absoluteFillObject} onPress={() => setOpen(false)} />
+        <Pressable style={StyleSheet.absoluteFill} onPress={() => setOpen(false)} />
 
         {/* Obsah dropdownu */}
         <View style={[s.dropdown, { top: dropdownTop }]} pointerEvents="box-none">

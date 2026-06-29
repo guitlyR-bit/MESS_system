@@ -3890,7 +3890,7 @@ const s = StyleSheet.create({
     backgroundColor: 'rgba(239,68,68,0.18)',
   },
   closedZoneLabelWrap: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -4068,7 +4068,7 @@ const s = StyleSheet.create({
     flexShrink: 0,
     marginLeft: 4,
     alignItems: 'center',
-    ...(Platform.OS === 'web' ? { cursor: 'default' as const } : {}),
+    ...(Platform.OS === 'web' ? { cursor: 'default' } as object : {}),
   },
   unpaidAlertTooltip: {
     position: 'absolute',
@@ -4088,7 +4088,7 @@ const s = StyleSheet.create({
     fontSize: 11,
     fontWeight: '600',
     color: '#fff',
-    whiteSpace: 'nowrap',
+    ...(Platform.OS === 'web' ? { whiteSpace: 'nowrap' } as object : {}),
   },
   bookingIconsCol: {
     position: 'absolute',
