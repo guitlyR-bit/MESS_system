@@ -2,6 +2,8 @@ import type { Club } from '@/types/database';
 
 export interface ClubAmenitiesSummary {
   paymentLabel: string | null;
+  multisportCoverageLabel: string | null;
+  benefitCardsLabel: string | null;
   dogsLabel: string | null;
   foodDrinksText: string | null;
   rentalText: string | null;
@@ -17,10 +19,21 @@ export function buildClubAmenitiesSummary(club: Club): ClubAmenitiesSummary {
   const paymentParts: string[] = [];
   if (club.accepts_cash) paymentParts.push('hotově');
   if (club.accepts_card) paymentParts.push('kartou');
-  if (club.accepts_multisport) paymentParts.push('Multisport kartou');
+  if (club.accepts_benefit_cards) paymentParts.push('stravenkovými / benefitními kartami');
 
   const paymentLabel = paymentParts.length > 0
     ? `Platba: ${paymentParts.join(', ')}`
+    : null;
+
+  const multisportCoverageLabel = club.accepts_multisport
+    ? club.multisport_coverage_amount != null && club.multisport_coverage_amount > 0
+      ? `Multisport karta pokryje ${club.multisport_coverage_amount} Kč z ceny kurtu (za hodinu).`
+      : 'Klub akceptuje Multisport karty.'
+    : null;
+
+  const benefitCardsLabel = club.accepts_benefit_cards
+    ? (club.benefit_cards_description?.trim()
+      || 'Klub akceptuje stravenkové a benefitní karty.')
     : null;
 
   const dogsLabel = club.allows_dogs
@@ -45,6 +58,8 @@ export function buildClubAmenitiesSummary(club: Club): ClubAmenitiesSummary {
 
   const paragraphParts = [
     paymentLabel,
+    multisportCoverageLabel,
+    benefitCardsLabel,
     dogsLabel,
     foodDrinksText,
     rentalText,
@@ -53,6 +68,8 @@ export function buildClubAmenitiesSummary(club: Club): ClubAmenitiesSummary {
 
   return {
     paymentLabel,
+    multisportCoverageLabel,
+    benefitCardsLabel,
     dogsLabel,
     foodDrinksText,
     rentalText,

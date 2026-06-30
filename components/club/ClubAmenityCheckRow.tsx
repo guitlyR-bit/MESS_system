@@ -2,18 +2,18 @@ import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '@/lib/theme';
 
-const A = colors.club.accent;
-
 export function ClubAmenityCheckRow({
   label,
   hint,
   checked,
   onToggle,
+  accentColor = colors.club.accent,
 }: {
   label: string;
   hint?: string;
   checked: boolean;
   onToggle: (value: boolean) => void;
+  accentColor?: string;
 }) {
   return (
     <TouchableOpacity
@@ -21,7 +21,7 @@ export function ClubAmenityCheckRow({
       style={s.row}
       activeOpacity={0.75}
     >
-      <View style={[s.box, checked && s.boxChecked]}>
+      <View style={[s.box, checked && { backgroundColor: accentColor, borderColor: accentColor }]}>
         {checked ? <Ionicons name="checkmark" size={15} color="#fff" /> : null}
       </View>
       <View style={s.textWrap}>
@@ -52,8 +52,8 @@ const s = StyleSheet.create({
     backgroundColor: colors.bgAlt,
   },
   boxChecked: {
-    backgroundColor: A,
-    borderColor: A,
+    backgroundColor: colors.club.accent,
+    borderColor: colors.club.accent,
   },
   textWrap: { flex: 1 },
   label: { fontSize: 14, fontWeight: '700', color: colors.textPrimary },

@@ -22,6 +22,8 @@ export interface Club {
   country: string;
   phone?: string | null;
   email?: string | null;
+  /** Jméno správce nebo odpovědného vedoucího klubu */
+  manager_name?: string | null;
   website?: string | null;
   instagram?: string | null;
   logo_url?: string | null;
@@ -34,6 +36,14 @@ export interface Club {
   accepts_card?: boolean;
   /** Akceptace Multisport karet */
   accepts_multisport?: boolean;
+  /** Kolik Kč z ceny kurtu pokryje Multisport karta (za hodinu) */
+  multisport_coverage_amount?: number | null;
+  /** Stravenkové a benefitní karty */
+  accepts_benefit_cards?: boolean;
+  /** Výčet akceptovaných stravenkových / benefitních karet */
+  benefit_cards_description?: string | null;
+  /** Barva veřejného profilu klubu (hex) */
+  profile_accent_color?: string | null;
   /** Psi v areálu klubu */
   allows_dogs?: boolean;
   /** Pití a občerstvení k dispozici */
@@ -94,6 +104,8 @@ export type PricingDayScope =
 export interface PricingCategory {
   id: string;
   name: string;
+  /** Barva kategorie v ceníku — hex */
+  color?: string;
   sport: PricingSport;
   price_per_hour: number;
   /** Celý den nebo časové rozmezí */

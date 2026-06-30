@@ -3,15 +3,15 @@ import { Tabs } from 'expo-router';
 import { colors } from '@/lib/theme';
 import { AppHeader } from '@/components/ui/AppHeader';
 import { useClubProfile } from '@/hooks/useClubProfile';
-
-const A = colors.club.accent;
+import { resolveClubProfileTheme } from '@/lib/clubProfileTheme';
 
 export default function ClubLayout() {
   const { profile } = useClubProfile();
+  const { accent } = resolveClubProfileTheme(profile);
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.bgAlt }}>
-      <AppHeader roleLabel="Klub" currentRole="club" accent={A} userName={profile.name} />
+      <AppHeader roleLabel="Klub" currentRole="club" accent={accent} userName={profile.name} />
       <Tabs
         screenOptions={{
           headerShown: false,
@@ -22,7 +22,7 @@ export default function ClubLayout() {
             paddingBottom: 8,
             paddingTop: 4,
           },
-          tabBarActiveTintColor: A,
+          tabBarActiveTintColor: accent,
           tabBarInactiveTintColor: '#666666',
           tabBarLabelStyle: {
             fontSize: 11,

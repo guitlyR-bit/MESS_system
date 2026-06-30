@@ -2,6 +2,7 @@ import type { Club, ClubSettings } from '@/types/database';
 import { buildClubOpeningHoursProfile } from '@/lib/clubProfileHours';
 import { buildGoogleMapsUrl, formatClubAddressLine } from '@/lib/clubMaps';
 import { buildClubAmenitiesSummary } from '@/lib/clubAmenities';
+import { buildClubPricingProfile } from '@/lib/clubProfilePricing';
 
 export function buildClubProfilePreviewModel(
   profile: Club,
@@ -9,6 +10,7 @@ export function buildClubProfilePreviewModel(
 ) {
   const hours = settings ? buildClubOpeningHoursProfile(settings) : null;
   const amenities = buildClubAmenitiesSummary(profile);
+  const pricing = settings ? buildClubPricingProfile(settings) : null;
   const instagramUrl = profile.instagram
     ? `https://instagram.com/${profile.instagram.replace(/^@/, '')}`
     : null;
@@ -24,5 +26,6 @@ export function buildClubProfilePreviewModel(
     websiteUrl,
     hours,
     amenities,
+    pricing,
   };
 }

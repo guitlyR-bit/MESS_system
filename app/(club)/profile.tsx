@@ -15,10 +15,12 @@ import { buildGoogleMapsUrl, formatClubAddressLine, formatCoordinates } from '@/
 import { geocodeAddress } from '@/lib/geocodeAddress';
 import { ClubOpeningHoursSection } from '@/components/club/ClubOpeningHoursSection';
 import { ClubProfileExtrasSection } from '@/components/club/ClubProfileExtrasSection';
+import { ClubProfileColorSection } from '@/components/club/ClubProfileColorSection';
+import { ClubProfilePricingSection } from '@/components/club/ClubProfilePricingSection';
 import { ClubProfilePreviewModal } from '@/components/club/ClubProfilePreviewModal';
+import { resolveClubProfileTheme } from '@/lib/clubProfileTheme';
 
 const W = colors.warm;
-const A = colors.club.accent;
 const GEOCODE_MIN_LENGTH = 5;
 const GEOCODE_DEBOUNCE_MS = 900;
 
@@ -62,6 +64,7 @@ function Field({
 export default function ClubProfileScreen() {
   const { profile, updateProfile } = useClubProfile();
   const settings = useClubSettings();
+  const { accent } = resolveClubProfileTheme(profile);
   const [previewVisible, setPreviewVisible] = useState(false);
   const [mapQuery, setMapQuery] = useState(() => formatClubAddressLine(profile));
   const [geocodeLoading, setGeocodeLoading] = useState(false);
@@ -191,14 +194,16 @@ export default function ClubProfileScreen() {
               <Image source={{ uri: profile.logo_url }} style={s.logoImage} resizeMode="cover" />
             ) : (
               <View style={s.logoPlaceholder}>
-                <Ionicons name="tennisball-outline" size={28} color={A} />
+                <Ionicons name="tennisball-outline" size={28} color={accent} />
               </View>
             )}
-            <View style={s.logoEditRing}>
+            <View style={[s.logoEditRing, { backgroundColor: accent }]}>
               <Ionicons name="camera" size={12} color="#fff" />
             </View>
           </TouchableOpacity>
         </View>
+
+        <ClubProfileColorSection profile={profile} updateProfile={updateProfile} />
 
         <View style={s.formSection}>
           <Text style={s.sectionTitle}>OBECNÉ ÚDAJE</Text>
@@ -238,6 +243,13 @@ export default function ClubProfileScreen() {
 
         <View style={s.formSection}>
           <Text style={s.sectionTitle}>KONTAKT A WEB</Text>
+          <Field
+            label="ODPOVĚDNÝ VEDOUCÍ / SPRÁVCE"
+            value={profile.manager_name ?? ''}
+            onChangeText={(manager_name) => updateProfile({ manager_name })}
+            placeholder="Jméno a příjmení"
+            autoCapitalize="words"
+          />
           <Field
             label="E-MAIL"
             value={profile.email ?? ''}
@@ -290,7 +302,7 @@ export default function ClubProfileScreen() {
           <View style={s.mapActions}>
             <TouchableOpacity
               onPress={handleGeocodeFromAddress}
-              style={[s.geocodeBtn, geocodeLoading && s.geocodeBtnDisabled]}
+              style={[s.geocodeBtn, { backgroundColor: accent }, geocodeLoading && s.geocodeBtnDisabled]}
               disabled={geocodeLoading}
               activeOpacity={0.85}
             >
@@ -317,9 +329,9 @@ export default function ClubProfileScreen() {
             Souřadnice: {formatCoordinates(profile.latitude, profile.longitude)}
           </Text>
 
-          <TouchableOpacity onPress={openGoogleMaps} style={s.mapsBtn} activeOpacity={0.85}>
-            <Ionicons name="map-outline" size={18} color={A} />
-            <Text style={s.mapsBtnText}>Otevřít v Google Maps</Text>
+          <TouchableOpacity onPress={openGoogleMaps} style={[s.mapsBtn, { borderColor: accent }]} activeOpacity={0.85}>
+            <Ionicons name="map-outline" size={18} color={accent} />
+            <Text style={[s.mapsBtnText, { color: accent }]}>Otevřít v Google Maps</Text>
           </TouchableOpacity>
 
           {(profile.latitude != null || profile.longitude != null) && (
@@ -334,6 +346,8 @@ export default function ClubProfileScreen() {
             </TouchableOpacity>
           )}
         </View>
+
+        <ClubProfilePricingSection />
 
         <ClubOpeningHoursSection />
 
@@ -399,7 +413,7 @@ const s = StyleSheet.create({
   logoEditRing: {
     position: 'absolute', bottom: 4, right: 4,
     width: 24, height: 24, borderRadius: 12,
-    backgroundColor: A, alignItems: 'center', justifyContent: 'center',
+    alignItems: 'center', justifyContent: 'center',
   },
 
   formSection: {
@@ -448,7 +462,7 @@ const s = StyleSheet.create({
   mapActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 12 },
   geocodeBtn: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
-    paddingVertical: 12, paddingHorizontal: 14, backgroundColor: A,
+    paddingVertical: 12, paddingHorizontal: 14,
   },
   geocodeBtnDisabled: { opacity: 0.7 },
   geocodeBtnText: { fontSize: 12, fontWeight: '900', color: '#fff', letterSpacing: 0.3 },
@@ -467,9 +481,9 @@ const s = StyleSheet.create({
   mapsBtn: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
     marginTop: 12, paddingVertical: 12, paddingHorizontal: 14,
-    borderWidth: 1.5, borderColor: A, alignSelf: 'flex-start',
+    borderWidth: 1.5, alignSelf: 'flex-start',
   },
-  mapsBtnText: { fontSize: 12, fontWeight: '800', color: A, letterSpacing: 0.3 },
+  mapsBtnText: { fontSize: 12, fontWeight: '800', letterSpacing: 0.3 },
   clearCoordsBtn: { marginTop: 10, paddingVertical: 8 },
   clearCoordsText: { fontSize: 12, fontWeight: '700', color: colors.textMuted },
 
